@@ -42,12 +42,37 @@ export function isClientAbortError(err) {
   const e = /** @type {NodeJS.ErrnoException} */ (err);
   // Node emits `Error: aborted` (no code) from http.Server#abortIncoming.
   if (e.message === "aborted" || e.message === "Aborted") return true;
+  // ANY AbortError/TimeoutError reaching the process level is a raced abort
+  // or timeout signal from OmniRoute's own orchestration: client disconnects
+  // (`request_signal_aborted`), per-model combo timeouts
+  // (`combo-per-model-timeout`), ProxyFetch retry signals, fetch/DOM
+  // cancellation. The operation has already failed; killing the process for
+  // it only converts one failed request into a full server outage (#12164).
+  if (e.name === "AbortError" || e.name === "TimeoutError") return true;
+  if (e.code === "DIRECT_RESPONSE_START_TIMEOUT") return true;
+  // Node ≥20 autoSelectFamily connect attempts aggregate per-address errors
+  // (e.g. IPv6 EHOSTUNREACH + IPv4 ETIMEDOUT against Cloudflare fronts). A
+  // pure connect-failure aggregate is a transient network condition, not a
+  // server fault — absorb it (#12164).
+  if (
+    e.name === "AggregateError" &&
+    Array.isArray(/** @type {AggregateError} */ (e).errors) &&
+    /** @type {AggregateError} */ (e).errors.length > 0 &&
+    /** @type {AggregateError} */ (e).errors.every(
+      (x) => typeof x?.code === "string" && /^(ECONN|EHOST|ENET|ETIMED|EPIPE|EAI_)/.test(x.code)
+    )
+  ) {
+    return true;
+  }
   switch (e.code) {
     case "ERR_STREAM_PREMATURE_CLOSE":
     case "ECONNRESET":
     case "EPIPE":
     case "ECONNABORTED":
     case "ETIMEDOUT":
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+    case "ECONNREFUSED":
     case "ENOTCONN":
     case "ECANCELED":
       return true;

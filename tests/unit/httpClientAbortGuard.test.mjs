@@ -3,6 +3,8 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   isClientAbortError,
   shouldSwallowUncaught,
@@ -115,5 +117,145 @@ test("shouldSwallowUncaught preserves crash semantics for genuine errors", () =>
 
 test("installProcessCrashGuard does not throw on import and is idempotent", () => {
   assert.doesNotThrow(() => installProcessCrashGuard(() => {}));
-  assert.doesNotThrow(() => installProcessCrashGuard(() => {}));
+});
+test("isClientAbortError matches OmniRoute SSE AbortError shapes (#fix-crash-guard-logger-7)", () => {
+  // Exact production shape from the 2026-08-31 crash log:
+  //   ⨯ unhandledRejection: Error [AbortError]: request_signal_aborted
+  const sseAbort = Object.assign(new Error("request_signal_aborted"), { name: "AbortError" });
+  assert.equal(isClientAbortError(sseAbort), true, "SSE teardown AbortError must be absorbed");
+  // Per-model combo timeout abort (2026-09-01 exit-7 crash): AbortError whose
+  // message is the abort reason, no 'abort' substring in it.
+  const comboTimeout = Object.assign(new Error("combo-per-model-timeout"), {
+    name: "AbortError",
+    cause: "combo-per-model-timeout",
+  });
+  assert.equal(isClientAbortError(comboTimeout), true, "combo per-model timeout AbortError must be absorbed");
+  // fetch / DOMException-style cancellation
+  const domAbort = new DOMException("This operation was aborted", "AbortError");
+  assert.equal(isClientAbortError(domAbort), true, "DOMException AbortError must be absorbed");
+  // A genuine TypeError that merely MENTIONS 'abort' must NOT be absorbed.
+  const typo = new TypeError("Cannot read properties of undefined (reading 'abort')");
+  assert.equal(isClientAbortError(typo), false);
+});
+test("isClientAbortError absorbs connect aggregates and ProxyFetch timeout signal (#12164)", () => {
+  // Production shapes from the 2026-08-31 exit-7 crash log: opencode.ai via
+  // Cloudflare — IPv6 EHOSTUNREACH + IPv4 ETIMEDOUT aggregated by Node's
+  // autoSelectFamily connect.
+  const agg = new AggregateError(
+    [
+      Object.assign(new Error("connect EHOSTUNREACH 2606:4700:3035::ac43:a717:443"), {
+        code: "EHOSTUNREACH",
+      }),
+      Object.assign(new Error("connect ETIMEDOUT 104.21.49.202:443"), { code: "ETIMEDOUT" }),
+    ],
+    "connect ETIMEDOUT 104.21.49.202:443"
+  );
+  assert.equal(isClientAbortError(agg), true, "pure connect aggregate must be absorbed");
+  // An aggregate containing a non-network member is a genuine bug signal.
+  const mixed = new AggregateError(
+    [Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }), new TypeError("bad config")],
+    "mixed"
+  );
+  assert.equal(isClientAbortError(mixed), false, "mixed aggregate must not be absorbed");
+  const hostUnreach = Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" });
+  assert.equal(isClientAbortError(hostUnreach), true, "direct EHOSTUNREACH must be absorbed");
+  // ProxyFetch's own retry signal — already handled by its retry path.
+  const directTimeout = Object.assign(new Error("Direct response did not start within 30000ms"), {
+    name: "TimeoutError",
+    code: "DIRECT_RESPONSE_START_TIMEOUT",
+  });
+  assert.equal(isClientAbortError(directTimeout), true, "ProxyFetch timeout signal must be absorbed");
+});
+
+test("shouldSwallowUncaught absorbs SSE AbortError rejections", () => {
+  const sseAbort = Object.assign(new Error("request_signal_aborted"), { name: "AbortError" });
+  assert.equal(shouldSwallowUncaught(sseAbort, "unhandledRejection"), true);
+});
+
+// Production crash (2026-08-25 → 08-31, ~170 restarts, exit code 7):
+// every real call site installs the guard with NO logger, so the old
+// `const logger = log ?? console` default invoked the console OBJECT as a
+// function inside the uncaughtException handler → TypeError inside
+// process._fatalException → Node exit code 7. These children run the REAL
+// production call shape; the process must survive benign aborts and still
+// crash on genuine errors.
+test("installProcessCrashGuard() with no logger swallows aborts instead of dying (exit-7 regression)", async () => {
+  const guardPath = fileURLToPath(
+    new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
+  );
+  const script = `
+    const { installProcessCrashGuard } = await import(process.argv[1]);
+    installProcessCrashGuard(); // production call sites pass NO logger
+    process.emit(
+      "uncaughtException",
+      Object.assign(new Error("aborted"), { code: "ECONNRESET" }),
+      "uncaughtException"
+    );
+    process.emit(
+      "unhandledRejection",
+      Object.assign(new Error("request_signal_aborted"), { name: "AbortError" }),
+      Promise.resolve()
+    );
+    process.emit(
+      "uncaughtException",
+      new AggregateError(
+        [
+          Object.assign(new Error("connect EHOSTUNREACH 2606:4700:3035::443"), {
+            code: "EHOSTUNREACH",
+          }),
+          Object.assign(new Error("connect ETIMEDOUT 104.21.49.202:443"), { code: "ETIMEDOUT" }),
+        ],
+        "connect ETIMEDOUT 104.21.49.202:443"
+      ),
+      "uncaughtException"
+    );
+    process.emit(
+      "unhandledRejection",
+      Object.assign(new Error("Direct response did not start within 30000ms"), {
+        name: "TimeoutError",
+        code: "DIRECT_RESPONSE_START_TIMEOUT",
+      }),
+      Promise.resolve()
+    );
+    console.log("ALIVE");
+    process.exit(0);
+  `;
+  const { status, stdout, stderr } = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, guardPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (status) => resolve({ status, stdout: out, stderr: err }));
+    child.on("error", reject);
+  });
+  assert.equal(status, 0, `child must survive benign aborts; stderr: ${stderr}`);
+  assert.match(stdout, /ALIVE/);
+});
+
+test("installProcessCrashGuard still crashes on genuine errors (no over-swallowing)", async () => {
+  const guardPath = fileURLToPath(
+    new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
+  );
+  const script = `
+    const { installProcessCrashGuard } = await import(process.argv[1]);
+    installProcessCrashGuard();
+    process.emit("uncaughtException", new Error("genuine failure"), "uncaughtException");
+    console.log("SHOULD_NOT_REACH");
+  `;
+  const { status, stdout, stderr: _stderr } = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, guardPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (status) => resolve({ status, stdout: out, stderr: err }));
+    child.on("error", reject);
+  });
+  assert.notEqual(status, 0, "genuine errors must keep crash semantics");
+  assert.doesNotMatch(stdout, /SHOULD_NOT_REACH/);
 });
