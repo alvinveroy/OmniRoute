@@ -192,6 +192,42 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "info",
   },
   {
+    key: "PROXY_SKIP_RECENTLY_FAILED",
+    label: "Skip Recently Failed Proxies",
+    description:
+      "Proxy pools and the per-account rotation of opencode stop re-serving a proxy that just failed (refused TCP probe, or a 429 received through it) for a per-process period that doubles on each repeat, up to a cap. No proxy status is written; with every candidate set aside the choice is unchanged. Off by default: selection order is exactly the plain rotation.",
+    descriptionI18nKey: "featureFlagProxySkipRecentlyFailedDescription",
+    category: "network",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
+  {
+    key: "PROXY_POOL_EGRESS_OBSERVATION",
+    label: "Proxy Pool Egress Observation",
+    description:
+      "Show, under a proxy pool in the dashboard, how many observed egress IPs served its members over the last 24 h, how many connections used them and the most seen behind one IP. Read-only, computed from the proxy log, never used for routing. Off by default: the pool editor is unchanged and the observation route answers null.",
+    descriptionI18nKey: "featureFlagProxyPoolEgressObservationDescription",
+    category: "network",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "OPENCODE_RESPONSES_STALL_ROTATION",
+    label: "OpenCode Responses Stall Rotation",
+    description:
+      "For the OpenCode executor, watch the first body byte of a streamed Responses reply (window: RESPONSES_FIRST_BYTE_TIMEOUT_MS, default 15000). A 2xx Responses stream that stays silent past the window is treated as stalled: the account is cooled down and the request rotates to the next account once; a second stall fails fast. Off by default: stalled streams keep today's wait until the stream readiness timeout.",
+    descriptionI18nKey: "featureFlagOpencodeResponsesStallRotationDescription",
+    category: "network",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
+  {
     key: "MITM_DISABLE_TLS_VERIFY",
     label: "Disable TLS Verify (MITM)",
     description: "Disable TLS certificate verification for MITM proxy",
@@ -450,6 +486,30 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "danger",
   },
   {
+    key: "STREAM_RECOVERY_TOOLCALL_ORDER_FIX",
+    label: "Tool-Call-Safe Continuation",
+    description:
+      "Make mid-stream continuation tool-call safe: never resume a cut stream once a tool call was emitted (in flight or already finished with finish_reason tool_calls), and close after one empty continuation instead of spending the whole budget. Off: release behavior.",
+    descriptionI18nKey: "featureFlagStreamRecoveryToolcallOrderFixDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "STREAM_EARLY_EOF_SIBLING_FAILOVER_ENABLED",
+    label: "Early-EOF Sibling Failover",
+    description:
+      "Fail over once to a sibling connection when an SSE stream closes before emitting any useful frame and the bounded same-connection retry is spent; with no usable sibling the original STREAM_EARLY_EOF 502 is returned. Off by default: early-EOF stays terminal after the same-connection retry.",
+    descriptionI18nKey: "featureFlagStreamEarlyEofSiblingFailoverEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
     key: "MODEL_CATALOG_INCLUDE_NAMES",
     label: "Model Catalog Names",
     description:
@@ -570,6 +630,54 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     requiresRestart: false,
     warningLevel: "caution",
   },
+  {
+    key: "SEARCH_STATS_HIDE_DELETED_CONNECTIONS",
+    label: "Hide Deleted Search Connections",
+    description:
+      "Search stats and recent searches only count providers that still have a live connection (keyless providers such as duckduckgo-free always count). Off keeps every retained search row with a provider id.",
+    descriptionI18nKey: "featureFlagSearchStatsHideDeletedConnectionsDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "FREE_BADGE_REQUIRES_PROVIDER_FREE_TIER",
+    label: "Strict Free Badge",
+    description:
+      "Dashboard provider pages: show the Free badge only on signals the provider honors — drops the display-name heuristic, non-boolean free fields and :free suffixes on registered providers without a documented free tier. Off keeps the historical badge rule.",
+    descriptionI18nKey: "featureFlagFreeBadgeRequiresProviderFreeTierDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
+    key: "RETRY_AFTER_PROVENANCE_ENABLED",
+    label: "Retry-After Provenance",
+    description:
+      "On aggregated 429/503 unavailable responses, omit Retry-After when no concrete future retry time is known (instead of a synthetic 1s), add error.retry_after_provenance (signal | none), and let combo drain paths read prose retry hints from JSON and plain-text upstream bodies.",
+    descriptionI18nKey: "featureFlagRetryAfterProvenanceEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
+  {
+    key: "PROTECTED_PRIORITY_INFRA_502_ENABLED",
+    label: "Protected-Priority Infra Stops as 502",
+    description:
+      "When a priority combo target marked fallback-only-on-quota-exhaustion stops the combo for a cause that is provably not quota (provider circuit breaker open, predictive latency skip), answer 502 instead of the quota-looking 503. Lockout, cooldown, unavailable, exhaustion and concurrency-cap stops keep 503.",
+    descriptionI18nKey: "featureFlagProtectedPriorityInfra502EnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
 
   // ──────────────── CLI (5) ────────────────
   {
@@ -622,7 +730,7 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     key: "OMNIROUTE_AUTO_SYNC_CLAUDE_PROFILES",
     label: "Auto-Sync Claude Code Profiles",
     description:
-      "After a provider model sync, automatically (re)write ~/.claude/profiles/<name>/settings.json Claude Code profiles from the live catalog. Never changes the active/default Claude config. Off by default.",
+      "After a provider model sync, automatically (re)write ~/.claude/profiles/'<name>'/settings.json Claude Code profiles from the live catalog. Never changes the active/default Claude config. Off by default.",
     descriptionI18nKey: "featureFlagOmnirouteAutoSyncClaudeProfilesDescription",
     category: "cli",
     defaultValue: "false",
@@ -664,5 +772,17 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     type: "boolean",
     requiresRestart: false,
     warningLevel: "caution",
+  },
+  {
+    key: "PROXY_HEALTH_BLOCKED_RESETS_STREAK",
+    label: "Proxy Health: Refusal Resets Failure Streak",
+    description:
+      "In the proxy health sweep, let a probe the target refused (401/403/429: the proxy relayed, the destination refused this egress IP) reset the proxy's consecutive-failure streak, like a served probe. Off by default: a refusal stays neutral and keeps the streak (#10654). A 5xx stays inconclusive either way, and a refusal never removes, disables or re-activates a proxy.",
+    descriptionI18nKey: "featureFlagProxyHealthBlockedResetsStreakDescription",
+    category: "health",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
   },
 ];

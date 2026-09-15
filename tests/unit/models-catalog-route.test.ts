@@ -7,6 +7,7 @@ import path from "node:path";
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-catalog-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "catalog-test-secret";
+process.env.CATALOG_BUILD_TIMEOUT_MS = process.env.CATALOG_BUILD_TIMEOUT_MS || "120000"; // #12627 bound flakes a cold tsx build; 12627-catalog-inflight-timeout owns it
 
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
@@ -1092,9 +1093,9 @@ test("v1 models catalog does not duplicate custom Jina specialty models", async 
 
   assert.equal(response.status, 200);
   assert.equal(visibleJinaEmbeddingRows.length, 1);
-  assert.equal(visibleJinaEmbeddingRows[0].id, "jina-ai/jina-embeddings-v5-text-small");
+  assert.equal(visibleJinaEmbeddingRows[0].id, "jina/jina-embeddings-v5-text-small");
   assert.equal(visibleJinaRerankRows.length, 1);
-  assert.equal(visibleJinaRerankRows[0].id, "jina-ai/jina-reranker-v3");
+  assert.equal(visibleJinaRerankRows[0].id, "jina/jina-reranker-v3");
 });
 
 test("v1 models catalog exposes image model input and output modalities for advanced image providers", async () => {

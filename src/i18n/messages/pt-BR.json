@@ -993,6 +993,11 @@
   "featureFlagExposeCcDiscoveryAliasesDescription": "Divulgar ids espelho claude/&lt;provider&gt;/&lt;model&gt; em /v1/models para que a descoberta de modelos do gateway Claude Code liste modelos não-Claude. Atenção: duplica as entradas do catálogo para todos os clientes quando ativado globalmente.",
   "featureFlagNoThinkingAliasEnabledDescription": "__MISSING__:Master switch for the no-think/&lt;provider&gt;/&lt;model&gt; gateway aliases. On (default): /v1/models advertises a no-thinking variant for every eligible thinking-capable Claude model, and a no-think/ id sent on a request resolves back to the real model with reasoning suppressed. Off: no variants are advertised and a no-think/ id is treated like any other unknown model id. The per-model ModelSpec.noThinkingAlias opt-in/opt-out still applies while this is on.",
   "featureFlagChatVirtualLanesEnabledDescription": "Ative faixas de admissão virtuais adaptativas por tenant para o despacho de provedores (#9654): o pico de um tenant não gera mais 503 para outro. A variável de ambiente OMNIROUTE_CHAT_VIRTUAL_LANES tem precedência sobre esta configuração do painel; as alterações entram em vigor ao reiniciar o servidor.",
+  "featureFlagFreeBadgeRequiresProviderFreeTierDescription": "Dashboard provider pages: show the Free badge only on signals the provider honors — drops the display-name heuristic, non-boolean free fields and :free suffixes on registered providers without a documented free tier. Off keeps the historical badge rule.",
+  "featureFlagProxySkipRecentlyFailedDescription": "Pools de proxy e a rotação por conta do opencode deixam de reutilizar um proxy que acabou de falhar (sonda TCP recusada, ou um 429 recebido por ele) por um período por processo que dobra a cada repetição, até um limite. Nenhum status de proxy é gravado; com todos os candidatos deixados de lado, a escolha não muda. Desligado por padrão: a ordem de seleção é exatamente a rotação simples.",
+  "featureFlagProxySkipRecentlyFailedDescription": "Pools de proxy e a rotação por conta do opencode deixam de reutilizar um proxy que acabou de falhar (sonda TCP recusada, ou um 429 recebido por ele) por um período por processo que dobra a cada repetição, até um limite. Nenhum status de proxy é gravado; com todos os candidatos deixados de lado, a escolha não muda. Desligado por padrão: a ordem de seleção é exatamente a rotação simples.",
+  "featureFlagProxyPoolEgressObservationDescription": "Mostra, abaixo de um pool de proxy no painel, quantos IPs de saída observados atenderam seus membros nas últimas 24 h, quantas conexões os usaram e o máximo visto atrás de um mesmo IP. Somente leitura, calculado a partir do log de proxy, nunca usado para roteamento. Desligado por padrão: o editor de pool não muda e a rota de observação responde null.",
+  "featureFlagProxyHealthBlockedResetsStreakDescription": "Na varredura de saúde de proxy, permite que uma sonda recusada pelo destino (401/403/429: o proxy retransmitiu, o destino recusou este IP de saída) zere a sequência de falhas consecutivas do proxy, como uma sonda atendida. Desligado por padrão: a recusa continua neutra e mantém a sequência. Um 5xx continua inconclusivo em qualquer caso, e uma recusa nunca remove, desativa ou reativa um proxy.",
   "sidebar": {
     "home": "Início",
     "dashboard": "Painel",
@@ -1808,6 +1813,9 @@
     "healthMonitor": "Monitor de Saúde",
     "reportIssue": "Reportar problema",
     "activeError": "{active} ativo · {errors} erro",
+    "topologyLegendActive": "Ativo",
+    "topologyLegendRecent": "Recente",
+    "topologyLegendError": "Erro",
     "oauthLabel": "OAuth",
     "apiKeyLabel": "Chave de API",
     "requestsShort": "{count} reqs",
@@ -6432,7 +6440,7 @@
     "commandCodeStartFailed": "Falha ao iniciar o comando Code auth",
     "connectionDeleted": "Conexão excluída",
     "connectionFallback": "conexão",
-    "coolingConnectionsDescription": "Essas conexões retornaram um 429 (limite de taxa) na última solicitação. O OmniRoute as ignorará até que o temporizador expire — não é necessário desativação manual.",
+    "coolingConnectionsDescription": "Essas conexões estão esfriando após a última solicitação. O OmniRoute as ignorará até o temporizador expirar — não é necessário desativar manualmente.",
     "coolingConnectionsTitle": "Resfriando atualmente ({count})",
     "failedDeleteAlias": "Falha ao excluir o alias",
     "failedDeleteConnection": "Falha ao excluir a conexão",
@@ -7742,6 +7750,10 @@
     "legacyJsonImportSuccess": "JSON legado importado com sucesso!",
     "jsonImportFailed": "Falha ao importar JSON",
     "jsonImportError": "Erro durante a importação de JSON",
+    "jsonImportAuthRequired": "É necessário autenticar-se para importar uma configuração JSON legada. Entre ou conclua a configuração inicial primeiro.",
+    "databaseSettingsAuthRequiredTitle": "Autenticação necessária",
+    "databaseSettingsAuthRequiredBody": "As configurações do banco de dados e a importação de JSON estão disponíveis apenas para um administrador autenticado. Entre ou conclua a configuração inicial para visualizá-las e editá-las.",
+    "databaseSettingsAuthRequiredCta": "Entrar",
     "storagePurgeData": "Limpar dados",
     "storagePurgeDataDesc": "Excluir imediatamente todos os registros sem aplicar verificações de retenção. Use com cautela.",
     "storageRetentionCleanup": "Configurações de Retenção",
@@ -8671,7 +8683,9 @@
     "languagePacksList": "Pacotes de idioma: {packs}",
     "dragToReorder": "Arraste para reordenar a etapa",
     "engine": "Engine",
-    "intensity": "Intensidade"
+    "intensity": "Intensidade",
+    "activeProfileMasterSwitchOffWarning": "__MISSING__:The active profile below will not run until the master \"Prompt Compression\" switch is turned on.",
+    "activeProfileMasterSwitchOffCta": "__MISSING__:Turn it on in Settings"
   },
   "compressionStudio": {
     "noRun": "Nenhuma execução de compressão disponível.",
@@ -8700,6 +8714,7 @@
     "run": "Executar",
     "laneRejected": "rejeitado: {reason}",
     "error": "erro",
+    "combinedError": "__MISSING__:Combined pipeline preview failed: {reason}",
     "combinedFlow": "Fluxo combinado",
     "eachLayer": "Cada camada separadamente",
     "diff": "Diferença",
@@ -9264,13 +9279,13 @@
     "grokAutoTopUpMax": "máximo",
     "grokAutoTopUpMonth": "mês",
     "grokAdditionalCredits": "Créditos adicionais",
-    "kiloAccountBalance": "__MISSING__:Account Balance",
-    "kiloPassBonus": "__MISSING__:Available bonus",
-    "kiloPassMeterLabel": "__MISSING__:Kilo Pass usage meter",
-    "kiloPassPaid": "__MISSING__:Paid",
-    "kiloPassRemaining": "__MISSING__:Remaining",
-    "kiloPassRenews": "__MISSING__:Renews {count} days",
-    "kiloPassUsageLabel": "__MISSING__:This month's usage",
+    "kiloAccountBalance": "Saldo da Conta",
+    "kiloPassBonus": "Bônus disponível",
+    "kiloPassMeterLabel": "Medidor de uso do Kilo Pass",
+    "kiloPassPaid": "Pago",
+    "kiloPassRemaining": "Restante",
+    "kiloPassRenews": "Renova em {count} dias",
+    "kiloPassUsageLabel": "Uso deste mês",
     "kimiExtraUsageCredits": "Créditos de uso extra",
     "kimiExtraUsage": "Uso extra",
     "kimiExtraUsageEnabled": "Ativado",
@@ -10955,6 +10970,9 @@
     "strategyLatency": "Otimizado por latência",
     "poolMembersLabel": "Membros do pool ({count})",
     "poolNoMembers": "Ainda não há proxies neste pool.",
+    "poolEgressObservation": "{exits, plural, one {# saída} other {# saídas}} usada(s) por {connections, plural, one {# conexão} other {# conexões}} · até {max} em uma saída · últimas {hours} h",
+    "poolEgressObservationEmpty": "Nenhum tráfego observado nas últimas {hours} h",
+    "poolEgressObservationHint": "Contado a partir do log de proxy na janela: IPs de saída distintos observados para os membros deste pool e as conexões do OmniRoute que os usaram. \"Em uma saída\" significa ao longo da janela, não ao mesmo tempo. O bloqueio de 429 por IP só pausa conexões da mesma família de provedor.",
     "poolRemove": "Remover",
     "poolRemoveFailed": "Falha ao remover o proxy do pool",
     "poolAddLabel": "Adicionar um proxy",
@@ -12975,6 +12993,12 @@
       "STREAM_RECOVERY_MIDSTREAM_ENABLED": {
         "description": "Permite que a recuperação de stream solicite a resposta novamente e a costure depois que bytes já chegaram ao cliente."
       },
+      "STREAM_RECOVERY_TOOLCALL_ORDER_FIX": {
+        "description": "__MISSING__:Make mid-stream continuation tool-call safe: never resume a cut stream after a tool call was sent (still in progress or already finished), and stop after one empty continuation instead of using the whole retry budget."
+      },
+      "STREAM_EARLY_EOF_SIBLING_FAILOVER_ENABLED": {
+        "description": "Faz failover uma única vez para uma conexão irmã quando um stream fecha antes de emitir qualquer frame útil e a nova tentativa limitada na mesma conexão já foi usada. Sem conexão irmã utilizável, o erro early-EOF original é retornado. Desligado: o early-EOF continua terminal após a nova tentativa."
+      },
       "MODEL_CATALOG_INCLUDE_NAMES": {
         "description": "Inclui campos de nome amigável para exibição nas respostas de /v1/models. Desative isso para clientes que aceitam apenas IDs de modelo."
       },
@@ -13011,6 +13035,14 @@
       "SERVER_OWNED_TOOL_LOOP_ENABLED": {
         "label": "Server-Owned Tool Loop",
         "description": "Continue chamadas de ferramentas do servidor (server-owned) em não-streaming até que o modelo retorne uma resposta utilizável pelo cliente."
+      },
+      "RETRY_AFTER_PROVENANCE_ENABLED": {
+        "label": "__MISSING__:Retry-After Provenance",
+        "description": "__MISSING__:On aggregated 429/503 unavailable responses, omit Retry-After when no concrete future retry time is known instead of sending a synthetic 1s, add error.retry_after_provenance, and read prose retry hints on combo drain paths."
+      },
+      "PROTECTED_PRIORITY_INFRA_502_ENABLED": {
+        "label": "__MISSING__:Protected-Priority Infra Stops as 502",
+        "description": "__MISSING__:Answer 502 instead of 503 when a quota-only-fallback priority target stops the combo for a cause that is provably not quota: an open provider circuit breaker or a predictive latency skip."
       }
     }
   },
@@ -13437,6 +13469,9 @@
     "colLimits": "Limites",
     "trainsOnPrompts": "Treina com prompts",
     "trainsOnPromptsHelp": "Este provedor declara que pode usar seus prompts para treinar modelos",
+    "limitsUnknownHelp": "__MISSING__:Limits reported by Radar feed only; no published limits for this entry",
+    "contextUnknownHelp": "__MISSING__:Context window unknown for this entry",
+    "capabilityUnknownHelp": "__MISSING__:Capability not reported by the feed",
     "colContext": "Contexto",
     "colCapabilities": "Capacidades",
     "colTos": "Risco ToS",
@@ -13621,6 +13656,7 @@
   },
   "featureFlagCapabilityFilterEnabledDescription": "Rejeitar requisições antes do despacho quando o modelo alvo nao possui as capacidades necessarias (visao, ferramentas, saída estruturada, janela de contexto). Protege requisições diretas que ignoram o filtro de compatibilidade do combo.",
   "featureFlagDisableContextWindowChecksDescription": "Ignora a verificação local do OmniRoute para janela de contexto e limite máximo de tokens de entrada em solicitações diretas a um único modelo. Os provedores upstream continuam aplicando seus limites reais. A compactação de prompts e os limites de tokens de saída permanecem ativos.",
+  "featureFlagSearchStatsHideDeletedConnectionsDescription": "Search stats and recent searches only count providers that still have a live connection (keyless providers such as duckduckgo-free always count). Off keeps every retained search row with a provider id.",
   "publicSystem": {
     "notFound": {
       "title": "Página não encontrada",
@@ -14001,6 +14037,16 @@
     "historyRange1d": "24 h",
     "historyRange7d": "7 dias",
     "historyRange30d": "30 dias",
+    "compareMode": "Comparar execuções",
+    "compareExit": "Sair do modo de comparação",
+    "compareHint": "Selecione duas execuções para comparar",
+    "compareTitle": "Comparação",
+    "compareDetailFailed": "Não foi possível carregar os detalhes desta execução",
+    "compareDifferentIdentity": "Fontes ou skills diferentes — as diferenças são apenas informativas",
+    "compareDuration": "Duração",
+    "compareCost": "Custo",
+    "compareEvents": "Eventos",
+    "compareDeltaLegend": "Δ direita − esquerda",
     "showCompleted": "Mostrar concluídos",
     "searchPlaceholder": "Buscar tarefas…",
     "filterStates": "Estados",
@@ -14022,6 +14068,7 @@
     "stateCancelled": "Cancelada",
     "overflowMore": "+{count} a mais",
     "emptyTitle": "Nada rodando ainda",
+    "noMatches": "Nenhuma tarefa corresponde a esses filtros",
     "emptyCloudAgentCta": "Configurar Cloud Agents",
     "emptyA2ACta": "Abrir A2A",
     "emptyConductorCta": "Abrir Conductor",

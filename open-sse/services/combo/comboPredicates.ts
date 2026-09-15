@@ -16,7 +16,11 @@ import {
   isLocalExecutionError,
   isModelCapacityOverloadError,
 } from "@/shared/utils/circuitBreaker";
-import { CONTEXT_OVERFLOW_PATTERNS, MODEL_ACCESS_DENIED_PATTERNS } from "../accountFallback.ts";
+import {
+  CONTEXT_OVERFLOW_PATTERNS,
+  MODEL_ACCESS_DENIED_PATTERNS,
+  cooldownUntilMs,
+} from "../accountFallback.ts";
 import { isResourceNotFoundResponse } from "../errorClassifier.ts";
 import { getTrustedLocalRateLimitResponse } from "../rateLimitManager/errors.ts";
 import type { ResolvedComboTarget } from "./types.ts";
@@ -242,6 +246,7 @@ const REQUEST_SCOPED_UPSTREAM_ERROR_CODES: Record<string, true> = {
   rate_limit_queue_timeout: true,
   rate_limit_queue_full: true,
   rate_limit_queue_wedged: true,
+  token_limit_exceeded: true,
   // #10360: our own executor-result contract violation. An internal defect, not
   // a provider/account fault — it must never cool a connection or trip a breaker.
   [EXECUTOR_CONTRACT_VIOLATION_CODE]: true,
@@ -476,7 +481,9 @@ export function normalizeConnectionStatus(value: unknown): string {
 
 export function hasFutureRateLimitUntil(value: unknown): boolean {
   if (value == null || value === "") return false;
-  const time = new Date(String(value)).getTime();
+  if (typeof value !== "string" && typeof value !== "number" && !(value instanceof Date))
+    return false;
+  const time = cooldownUntilMs(value);
   return Number.isFinite(time) && time > Date.now();
 }
 

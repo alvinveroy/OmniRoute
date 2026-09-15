@@ -173,6 +173,71 @@ export function isNetworkRotationSharedEgressGuardEnabled(): boolean {
   }
 }
 
+/**
+ * Proxy refusal memory (#13578): pools and account rotation skip a proxy that just failed.
+ * Opt-in; an unreadable flag store keeps the plain selection.
+ */
+export function isProxySkipRecentlyFailedEnabled(): boolean {
+  try {
+    return isFeatureFlagEnabled("PROXY_SKIP_RECENTLY_FAILED");
+  } catch (error) {
+    console.error(
+      "[featureFlags] Failed to resolve PROXY_SKIP_RECENTLY_FAILED, defaulting to disabled:",
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
+ * Pool egress observation panel (#13581): read-only dashboard line under a proxy pool.
+ * Opt-in; an unreadable flag store keeps it hidden.
+ */
+export function isPoolEgressObservationEnabled(): boolean {
+  try {
+    return isFeatureFlagEnabled("PROXY_POOL_EGRESS_OBSERVATION");
+  } catch (error) {
+    console.error(
+      "[featureFlags] Failed to resolve PROXY_POOL_EGRESS_OBSERVATION, defaulting to disabled:",
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
+ * Proxy health sweep (#13608): a target-refused probe resets the consecutive-failure streak.
+ * Opt-in; an unreadable flag store keeps the neutral policy (#10654).
+ */
+export function isProxyHealthBlockedResetsStreakEnabled(): boolean {
+  try {
+    return isFeatureFlagEnabled("PROXY_HEALTH_BLOCKED_RESETS_STREAK");
+  } catch (error) {
+    console.error(
+      "[featureFlags] Failed to resolve PROXY_HEALTH_BLOCKED_RESETS_STREAK, defaulting to disabled:",
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
+ * OpenCode Responses first-byte stall rotation (#13484). Opt-in: when off, the stream
+ * readiness timeout stays the only bound on a stalled Responses stream.
+ * Fail closed: an unreadable flag store keeps the pre-flag behavior (disabled).
+ */
+export function isOpencodeResponsesStallRotationEnabled(): boolean {
+  try {
+    return isFeatureFlagEnabled("OPENCODE_RESPONSES_STALL_ROTATION");
+  } catch (error) {
+    console.error(
+      "[featureFlags] Failed to resolve OPENCODE_RESPONSES_STALL_ROTATION, defaulting to disabled:",
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
 export function isServerOwnedToolLoopEnabled(
   reader: (key: string) => boolean = isFeatureFlagEnabled
 ): boolean {
