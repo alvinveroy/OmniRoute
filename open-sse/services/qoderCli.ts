@@ -1,4 +1,3 @@
-import "server-only";
 import { spawn } from "child_process";
 import crypto from "crypto";
 import fs from "fs";
