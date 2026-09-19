@@ -85,6 +85,25 @@ export function isClientAbortError(err) {
   // it only converts one failed request into a full server outage (#12164).
   if (e.name === "AbortError" || e.name === "TimeoutError") return true;
   if (e.code === "DIRECT_RESPONSE_START_TIMEOUT") return true;
+  // Combo dispatch cancels a losing hedged target / a stalled target by
+  // aborting with `new Error(reason)` for one of the reasons in
+  // open-sse/services/combo/comboAbortReasons.ts (targetTimeoutRunner.ts).
+  // streamHandler.ts forwards that reason to the stream controller as a plain
+  // string, and a leaked abort listener in
+  // open-sse/handlers/chatCore/upstreamTimeouts.ts (executeWithUpstreamStartTimeout)
+  // rebuilt it via createAbortError() as an AbortError-named Error to reject a
+  // promise nothing was awaiting. That unhandledRejection reached this guard,
+  // which re-threw it as an uncaughtException. Production exit 2026-08-31:
+  //   Error [AbortError]: hedge-cancelled
+  // The listener leak is fixed at the source; this stays as the last-resort net.
+  // A sibling target winning / a target stalling is never a server fault, so
+  // match the exact reason text whatever `name` the thrower stamped on it —
+  // some call sites raise a plain `new Error(reason)` with no relabelling at
+  // all, so `e.name` alone (checked above) is not enough to catch those.
+  // Inlined rather than imported from comboAbortReasons.ts: this file runs
+  // under plain node (scripts/dev/run-next.mjs, no tsx) and must not depend on
+  // type-stripping being available for that .ts module.
+  if (COMBO_ABORT_REASONS.has(String(e.message))) return true;
   // Node ≥20 autoSelectFamily connect attempts aggregate per-address errors
   // (e.g. IPv6 EHOSTUNREACH + IPv4 ETIMEDOUT against Cloudflare fronts). A
   // pure connect-failure aggregate is a transient network condition, not a

@@ -30,7 +30,6 @@ export const COMBO_SKIP_REASONS = [
   "concurrency_cap",
   "admission_lane",
   "predictive_ttft",
-  "persisted_cooldown",
 ] as const;
 
 export type ComboSkipReason = (typeof COMBO_SKIP_REASONS)[number];
@@ -43,8 +42,6 @@ export interface ComboTraceEntry {
   target: string;
   decision: ComboDecision;
   reason?: ComboSkipReason;
-  /** Optional human-readable detail (e.g. cooldown reset timestamp). Never contains credentials. */
-  detail?: string;
   ts: number;
   /**
    * Safe, non-secret elaboration on `reason` (e.g. a cooldown reset ISO
@@ -131,7 +128,6 @@ export function recordComboDecision(
     reason: entry.reason as ComboSkipReason | undefined,
     detail: entry.detail,
     ts: Date.now(),
-    detail: entry.detail,
   });
 }
 
@@ -226,6 +222,21 @@ function pruneExpired(): void {
  * hammering a fully-quota-walled combo.
  * Pure function over the trace — no DB, no clock dependency beyond Date parsing.
  */
+/**
+ * Parses a `persisted_cooldown` detail line's `until <ISO timestamp>` marker
+ * and returns its epoch ms, but only when it is a valid, still-future
+ * timestamp (an expired or unparseable reset never becomes `nextRetryAt`).
+ * Extracted from summarizeSkippedTargetsWithRetry to keep its cognitive
+ * complexity low (sonarjs/cognitive-complexity ratchet).
+ */
+function parseFuturePersistedCooldownResetMs(detail: string | undefined): number | null {
+  if (!detail) return null;
+  const match = detail.match(/until (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/);
+  if (!match) return null;
+  const ms = new Date(match[1]).getTime();
+  return Number.isFinite(ms) && ms > Date.now() ? ms : null;
+}
+
 export function summarizeSkippedTargetsWithRetry(trace: ComboTrace | null): {
   skippedTargets: Array<{ target: string; reason: ComboSkipReason; detail?: string }>;
   nextRetryAt: string | null;
@@ -241,13 +252,9 @@ export function summarizeSkippedTargetsWithRetry(trace: ComboTrace | null): {
     };
     if (entry.detail) item.detail = entry.detail;
     skippedTargets.push(item);
-    if (entry.reason === "persisted_cooldown" && entry.detail) {
-      const match = entry.detail.match(/until (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/);
-      if (match) {
-        const ms = new Date(match[1]).getTime();
-        if (Number.isFinite(ms) && ms > Date.now() && ms < earliestMs) earliestMs = ms;
-      }
-    }
+    if (entry.reason !== "persisted_cooldown") continue;
+    const resetMs = parseFuturePersistedCooldownResetMs(entry.detail);
+    if (resetMs !== null && resetMs < earliestMs) earliestMs = resetMs;
   }
   return {
     skippedTargets,

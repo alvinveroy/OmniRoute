@@ -1,4 +1,3 @@
-import "server-only";
 /**
  * Cursor Agent CLI version for AgentService/Run impersonation.
  *

@@ -18,10 +18,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildOpencodeBackgroundHeaders } from "../../open-sse/utils/opencodeHeaders.ts";
+import {
+  buildOpencodeBackgroundHeaders,
+  OPENCODE_REQUEST_PATTERN,
+  OPENCODE_SESSION_PATTERN,
+} from "../../open-sse/utils/opencodeHeaders.ts";
 import { PROVIDER_MODELS_CONFIG } from "../../src/app/api/providers/[id]/models/discovery/providerModelsConfig.ts";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_HASH_RE = /^[0-9a-f]{16}$/i;
 
 test("background headers carry the OpenCode CLI identity, not the bare runtime UA", () => {
@@ -29,7 +32,10 @@ test("background headers carry the OpenCode CLI identity, not the bare runtime U
   assert.equal(headers["User-Agent"], "opencode");
   assert.equal(headers["x-opencode-client"], "desktop");
   assert.equal(headers["x-opencode-project"], "global");
-  assert.match(headers["x-opencode-request"] ?? "", UUID_RE);
+  // applyCliDefaults() always renders request ids in the canonical `msg_` +
+  // 12 hex + 14 base62 shape (OPENCODE_REQUEST_PATTERN), never a bare UUID —
+  // see opencodeHeaders.ts::canonicalId().
+  assert.match(headers["x-opencode-request"] ?? "", OPENCODE_REQUEST_PATTERN);
 });
 
 test("background session id is a stable per-seed fingerprint (same hash family as the chat path)", () => {
@@ -48,14 +54,21 @@ test("background session id differs across seeds (connections do not share an id
 test("seedless background calls still send a session id (random fallback)", () => {
   const headers = buildOpencodeBackgroundHeaders();
   const value = headers["x-opencode-session"] ?? "";
+  // No seed means applyCliDefaults() falls back to a random canonical `ses_`
+  // id (OPENCODE_SESSION_PATTERN); a seeded call instead produces a
+  // generateSessionId() hex fingerprint (SESSION_HASH_RE) — either is a
+  // valid "still sends a session id" outcome here.
   assert.ok(
-    UUID_RE.test(value) || SESSION_HASH_RE.test(value),
-    `expected a UUID or fingerprint session id, got ${value}`
+    OPENCODE_SESSION_PATTERN.test(value) || SESSION_HASH_RE.test(value),
+    `expected a canonical ses_ id or fingerprint session id, got ${value}`
   );
 });
 
 test("explicit userAgent override wins over the CLI default", () => {
-  const headers = buildOpencodeBackgroundHeaders({ seed: "conn-a", userAgent: "opencode-cli/9.9.9" });
+  const headers = buildOpencodeBackgroundHeaders({
+    seed: "conn-a",
+    userAgent: "opencode-cli/9.9.9",
+  });
   assert.equal(headers["User-Agent"], "opencode-cli/9.9.9");
 });
 
