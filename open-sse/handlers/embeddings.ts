@@ -21,6 +21,7 @@ import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { stripStaleEncodingHeaders } from "../utils/upstreamResponseHeaders.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import { stripTrailingSlashes } from "../utils/urlSanitize.ts";
+import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
 import {
   hasStructuredEmbeddingInput,
@@ -264,7 +265,8 @@ export function clampEmbeddingStringInput(input: unknown): unknown {
   const clampString = (s: string): string =>
     s.length > MAX_EMBEDDING_INPUT_CHARS ? s.slice(0, MAX_EMBEDDING_INPUT_CHARS) : s;
   if (typeof input === "string") return clampString(input);
-  if (Array.isArray(input)) return input.map((item) => (typeof item === "string" ? clampString(item) : item));
+  if (Array.isArray(input))
+    return input.map((item) => (typeof item === "string" ? clampString(item) : item));
   return input;
 }
 
@@ -300,15 +302,30 @@ function resolveLocalEmbeddingUrl(runtime: EmbeddingRuntime): string {
     typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()
       ? configuredBaseUrl
       : runtime.providerConfig.baseUrl;
-  const localServerHost = stripTrailingSlashes(rawBaseUrl.trim())
-    .replace(/\/v1\/(?:chat\/completions|embeddings)$/i, "")
+  const trimmed = stripTrailingSlashes(rawBaseUrl.trim());
+  if (trimmed.toLowerCase().endsWith("/embeddings")) {
+    return trimmed;
+  }
+  const localServerHost = trimmed
+    .replace(/\/v1\/chat\/completions$/i, "")
+    .replace(/\/chat\/completions$/i, "")
     .replace(/\/api\/chat$/i, "")
     .replace(/\/v1$/i, "");
   return `${localServerHost}/v1/embeddings`;
 }
 
+function isLocalEmbeddingProvider(provider: string): boolean {
+  return (
+    provider === "ollama-local" ||
+    provider === "lmstudio" ||
+    provider === "llama-cpp" ||
+    provider === "llamacpp" ||
+    provider === "lemonade"
+  );
+}
+
 function resolveUpstreamUrl(runtime: EmbeddingRuntime): string {
-  return runtime.provider === "ollama-local" || runtime.provider === "lmstudio"
+  return isLocalEmbeddingProvider(runtime.provider)
     ? resolveLocalEmbeddingUrl(runtime)
     : runtime.providerConfig.baseUrl;
 }
@@ -317,10 +334,7 @@ function buildAuth(
   runtime: EmbeddingRuntime
 ): { headers: Record<string, string>; token: string | null } | EmbeddingFailure {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token =
-    runtime.providerConfig.authType === "none"
-      ? null
-      : runtime.credentials?.apiKey || runtime.credentials?.accessToken || null;
+  const token = runtime.credentials?.apiKey || runtime.credentials?.accessToken || null;
   if (!token && runtime.providerConfig.authType !== "none") {
     return failure(
       401,
@@ -490,6 +504,7 @@ async function fetchClovaEmbeddingBatch(
       method: "POST",
       headers: prepared.headers,
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     lastHeaders = response.headers;
     if (!response.ok) return response;
@@ -513,6 +528,7 @@ async function dispatchEmbeddingRequest(
     method: "POST",
     headers: prepared.headers,
     body: JSON.stringify(prepared.upstreamBody),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 }
 
@@ -585,7 +601,10 @@ function normalizeEmbeddingData(
     normalizedResponse: {
       object: "list",
       data: data.data || data,
-      model: `${runtime.provider}/${runtime.model}`,
+      model:
+        typeof runtime.body.model === "string" && !runtime.body.model.includes("/")
+          ? runtime.body.model
+          : `${runtime.provider}/${runtime.model}`,
       usage: data.usage || { prompt_tokens: 0, total_tokens: 0 },
     },
   };
@@ -672,12 +691,18 @@ function handleEmbeddingException(
   error: unknown
 ): EmbeddingFailure {
   const message = error instanceof Error ? error.message : String(error);
+  const isTimeout =
+    error instanceof Error &&
+    (error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      message.toLowerCase().includes("timeout"));
+  const status = isTimeout ? 504 : 502;
   runtime.log?.error("EMBED", `${runtime.provider} fetch error: ${message}`);
   runtime.reqLogger.logError(error, prepared.upstreamBody);
   saveCallLog({
     method: "POST",
     path: "/v1/embeddings",
-    status: 502,
+    status,
     model: `${runtime.provider}/${runtime.model}`,
     provider: runtime.provider,
     duration: Date.now() - runtime.startTime,
@@ -688,7 +713,7 @@ function handleEmbeddingException(
     apiKeyName: runtime.apiKeyName,
     connectionId: runtime.connectionId,
   }).catch(() => {});
-  return failure(502, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
+  return failure(status, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
 }
 
 async function executeEmbedding(

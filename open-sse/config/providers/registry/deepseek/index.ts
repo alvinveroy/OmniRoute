@@ -7,6 +7,7 @@ export const deepseekProvider: RegistryEntry = {
   executor: "default",
   baseUrl: "https://api.deepseek.com/responses",
   authType: "apikey",
+  defaultContextLength: 1_000_000,
   authHeader: "bearer",
   alternateFormats: [
     {
