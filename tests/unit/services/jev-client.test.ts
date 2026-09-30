@@ -1,0 +1,366 @@
+/**
+ * Unit tests: Jev decision layer — config gating, fail-open client
+ * (cache, retries, circuit breaker, timeout) and typed decision parsing.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+
+const JEV_ENV_KEYS = [
+  "OMNIROUTE_JEV_ENABLED",
+  "OMNIROUTE_JEV_API_KEY",
+  "OMNIROUTE_JEV_BASE_URL",
+  "OMNIROUTE_JEV_MODEL",
+  "OMNIROUTE_JEV_TIMEOUT_MS",
+  "OMNIROUTE_JEV_FEATURES",
+  "OMNIROUTE_JEV_BLOCK_THRESHOLD",
+  "TYPESAFE_API_KEY",
+  "TYPESAFE_BASE_URL",
+];
+const savedEnv = new Map<string, string | undefined>();
+for (const key of JEV_ENV_KEYS) savedEnv.set(key, process.env[key]);
+
+const {
+  askJev,
+  getJevClientStats,
+  __resetJevClientForTests,
+  __resetJevRuntimeCacheForTests,
+  parseJevFeatures,
+  isJevFeatureEnabled,
+  resolveJevRuntime,
+  decideRoute,
+  decideCompression,
+  decideToolSelection,
+  sampleText,
+  noulProbability,
+  choiceLabel,
+  TOOL_SELECTION_NONE,
+} = await import("../../../open-sse/services/jev/index.ts");
+
+type FetchCall = { url: string; init: RequestInit | undefined };
+let fetchCalls: FetchCall[] = [];
+const originalFetch = globalThis.fetch;
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
+}
+
+function clearJevEnv(): void {
+  for (const key of JEV_ENV_KEYS) delete process.env[key];
+}
+
+function useCredential(): void {
+  process.env.OMNIROUTE_JEV_API_KEY = "test-key";
+  process.env.OMNIROUTE_JEV_BASE_URL = "https://jev.test";
+  process.env.OMNIROUTE_JEV_TIMEOUT_MS = "2000";
+}
+
+test.beforeEach(() => {
+  clearJevEnv();
+  fetchCalls = [];
+  __resetJevClientForTests();
+  __resetJevRuntimeCacheForTests();
+});
+
+test.afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearJevEnv();
+  for (const [key, value] of savedEnv) if (value !== undefined) process.env[key] = value;
+  __resetJevClientForTests();
+  __resetJevRuntimeCacheForTests();
+});
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+test("parseJevFeatures: empty/all enable every lane, csv enables a subset, unknown tokens ignored", () => {
+  assert.equal(parseJevFeatures(undefined).routing, true);
+  assert.equal(parseJevFeatures(undefined).mcp, true);
+  assert.deepEqual(parseJevFeatures("routing, compression"), { routing: true, compression: true });
+  assert.deepEqual(parseJevFeatures("routing,bogus"), { routing: true });
+});
+
+test("isJevFeatureEnabled: master off kills every lane; csv subset gates individual lanes", () => {
+  process.env.OMNIROUTE_JEV_ENABLED = "off";
+  assert.equal(isJevFeatureEnabled("routing"), false);
+
+  process.env.OMNIROUTE_JEV_ENABLED = "auto";
+  process.env.OMNIROUTE_JEV_FEATURES = "routing";
+  assert.equal(isJevFeatureEnabled("routing"), true);
+  assert.equal(isJevFeatureEnabled("mcp"), false);
+});
+
+test("resolveJevRuntime: null without a credential", async () => {
+  const runtime = await resolveJevRuntime();
+  assert.equal(runtime, null);
+});
+
+test("resolveJevRuntime: env credential resolves with defaults", async () => {
+  useCredential();
+  const runtime = await resolveJevRuntime();
+  assert.ok(runtime);
+  assert.equal(runtime.apiKey, "test-key");
+  assert.equal(runtime.baseUrl, "https://jev.test");
+  assert.equal(runtime.model, "jev-latest");
+  assert.equal(runtime.blockThreshold, 0.9);
+});
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+
+test("askJev: returns null and never calls fetch without a credential", async () => {
+  globalThis.fetch = (async (...args: unknown[]) => {
+    fetchCalls.push({ url: String(args[0]), init: args[1] as RequestInit });
+    return jsonResponse({ answers: {} });
+  }) as typeof fetch;
+  const result = await askJev("state", { q: { type: "noul", instructions: "?" } });
+  assert.equal(result, null);
+  assert.equal(fetchCalls.length, 0);
+});
+
+test("askJev: parses answers, sends the wire contract, and caches identical decisions", async () => {
+  useCredential();
+  globalThis.fetch = (async (...args: unknown[]) => {
+    fetchCalls.push({ url: String(args[0]), init: args[1] as RequestInit });
+    return jsonResponse({ model: "jev-test", answers: { q: { type: "noul", noul: 0.9 } } });
+  }) as typeof fetch;
+
+  const questions = { q: { type: "noul" as const, instructions: "Is it?" } };
+  const first = await askJev("state-a", questions);
+  assert.ok(first);
+  assert.equal(first.model, "jev-test");
+  assert.equal(noulProbability(first.answers.q), 0.9);
+  assert.equal(first.cached, false);
+
+  const second = await askJev("state-a", questions);
+  assert.ok(second);
+  assert.equal(second.cached, true);
+  assert.equal(fetchCalls.length, 1);
+
+  const call = fetchCalls[0];
+  assert.equal(call.url, "https://jev.test/v1/systemone");
+  assert.equal((call.init?.headers as Record<string, string>).Authorization, "Bearer test-key");
+  const sentBody = JSON.parse(String(call.init?.body)) as Record<string, unknown>;
+  assert.equal(sentBody.state, "state-a");
+  assert.equal(sentBody.model, "jev-latest");
+  assert.deepEqual(sentBody.questions, questions);
+});
+
+test("askJev: retries transient 5xx then succeeds", async () => {
+  useCredential();
+  let attempt = 0;
+  globalThis.fetch = (async () => {
+    attempt += 1;
+    if (attempt < 3) return jsonResponse({ error: "boom" }, 500);
+    return jsonResponse({ answers: { q: { type: "noul", noul: 0.4 } } });
+  }) as typeof fetch;
+
+  const result = await askJev("state-retry", { q: { type: "noul", instructions: "?" } });
+  assert.ok(result);
+  assert.equal(attempt, 3);
+  assert.equal(getJevClientStats().retries, 2);
+  assert.equal(getJevClientStats().failures, 0);
+});
+
+test("askJev: a non-retryable 4xx fails immediately and fails open", async () => {
+  useCredential();
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return jsonResponse({ error: "bad request" }, 400);
+  }) as typeof fetch;
+
+  const result = await askJev("state-400", { q: { type: "noul", instructions: "?" } });
+  assert.equal(result, null);
+  assert.equal(calls, 1);
+  assert.equal(getJevClientStats().failures, 1);
+});
+
+test("askJev: circuit breaker opens after consecutive failures and short-circuits", async () => {
+  useCredential();
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return jsonResponse({ error: "bad" }, 400);
+  }) as typeof fetch;
+
+  for (let i = 0; i < 5; i += 1) {
+    await askJev(`state-breaker-${i}`, { q: { type: "noul", instructions: "?" } });
+  }
+  assert.equal(calls, 5);
+  assert.ok(getJevClientStats().breakerOpenUntil !== null);
+
+  const blocked = await askJev("state-breaker-blocked", {
+    q: { type: "noul", instructions: "?" },
+  });
+  assert.equal(blocked, null);
+  assert.equal(calls, 5); // no additional fetch
+  assert.equal(getJevClientStats().breakerRejections, 1);
+});
+
+test("askJev: a hung upstream times out and fails open", async () => {
+  useCredential();
+  globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) => {
+    const { promise, reject } = Promise.withResolvers<Response>();
+    init?.signal?.addEventListener("abort", () => {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    });
+    return promise;
+  }) as typeof fetch;
+
+  const result = await askJev(
+    "state-timeout",
+    { q: { type: "noul", instructions: "?" } },
+    { timeoutMs: 60 }
+  );
+  assert.equal(result, null);
+  assert.equal(getJevClientStats().failures, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Decisions
+// ---------------------------------------------------------------------------
+
+test("decideRoute: parses intent/complexity/safety/firstByte from one call", async () => {
+  useCredential();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      model: "jev-test",
+      answers: {
+        intent: { type: "choice", choice: "code", confidence: 0.8, probabilities: { code: 0.8 } },
+        complexity: {
+          type: "choice",
+          choice: "moderate",
+          confidence: 0.7,
+          probabilities: { moderate: 0.7 },
+        },
+        safety: { type: "noul", noul: 0.05 },
+        firstByte: { type: "noul", noul: 0.85 },
+      },
+    })) as typeof fetch;
+
+  const decision = await decideRoute({ prompt: "fix this TypeScript build error" });
+  assert.ok(decision);
+  assert.equal(decision.intent, "code");
+  assert.equal(decision.complexity, "moderate");
+  assert.equal(decision.safetyRisk, 0.05);
+  assert.equal(decision.longFirstByte, true);
+});
+
+test("decideRoute: unparseable label yields null (fail-open)", async () => {
+  useCredential();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      answers: {
+        intent: { type: "choice", choice: "banana", confidence: 0.9, probabilities: {} },
+        complexity: {
+          type: "choice",
+          choice: "simple",
+          confidence: 0.9,
+          probabilities: {},
+        },
+      },
+    })) as typeof fetch;
+  const decision = await decideRoute({ prompt: "hello" });
+  assert.equal(decision, null);
+});
+
+test("decideCompression: parses lowBenefit/preferred/intensity", async () => {
+  useCredential();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      answers: {
+        lowBenefit: { type: "noul", noul: 0.2 },
+        preferred: {
+          type: "choice",
+          choice: "rtk",
+          confidence: 0.75,
+          probabilities: { rtk: 0.75 },
+        },
+        intensity: {
+          type: "choice",
+          choice: "standard",
+          confidence: 0.6,
+          probabilities: { standard: 0.6 },
+        },
+      },
+    })) as typeof fetch;
+
+  const decision = await decideCompression({
+    bodyText: "x".repeat(500),
+    estimatedTokens: 5_000,
+    activeMode: "lite",
+  });
+  assert.ok(decision);
+  assert.equal(decision.lowBenefit, 0.2);
+  assert.equal(decision.preferred, "rtk");
+  assert.equal(decision.intensity, "standard");
+});
+
+test("decideToolSelection: returns the picked tool, null for __none__, and ignores foreign labels", async () => {
+  useCredential();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      answers: {
+        tool: {
+          type: "choice",
+          choice: "omniroute_get_health",
+          confidence: 0.9,
+          probabilities: {},
+        },
+      },
+    })) as typeof fetch;
+
+  const candidates = [
+    { name: "omniroute_get_health", description: "health" },
+    { name: "omniroute_list_combos", description: "combos" },
+  ];
+  const picked = await decideToolSelection({ query: "is the server healthy?", candidates });
+  assert.ok(picked);
+  assert.equal(picked.tool, "omniroute_get_health");
+
+  __resetJevClientForTests();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      answers: {
+        tool: { type: "choice", choice: TOOL_SELECTION_NONE, confidence: 0.9, probabilities: {} },
+      },
+    })) as typeof fetch;
+  const none = await decideToolSelection({ query: "is the server healthy?", candidates });
+  assert.equal(none, null);
+
+  __resetJevClientForTests();
+  globalThis.fetch = (async () =>
+    jsonResponse({
+      answers: {
+        tool: { type: "choice", choice: "not-a-candidate", confidence: 0.9, probabilities: {} },
+      },
+    })) as typeof fetch;
+  const foreign = await decideToolSelection({ query: "is the server healthy?", candidates });
+  assert.equal(foreign, null);
+});
+
+test("sampleText: keeps head and tail with an explicit omission marker", () => {
+  const long = "a".repeat(100) + "b".repeat(100);
+  const sampled = sampleText(long, 40);
+  assert.ok(sampled.startsWith("a"));
+  assert.ok(sampled.endsWith("b"));
+  assert.ok(sampled.includes("omitted"));
+  assert.equal(sampleText("short", 40), "short");
+});
+
+test("answer extractors reject mismatched shapes", () => {
+  assert.equal(noulProbability(undefined), null);
+  assert.equal(
+    noulProbability({ type: "choice", choice: "x", confidence: 1, probabilities: {} }),
+    null
+  );
+  assert.equal(choiceLabel({ type: "noul", noul: 0.5 }), null);
+  assert.equal(choiceLabel({ type: "choice", choice: "", confidence: 1, probabilities: {} }), null);
+});
