@@ -37,6 +37,9 @@ const {
   choiceLabel,
   alignAnswersToQuestions,
   resolveChatCompletionsUrl,
+  isDecisionModelRequest,
+  isSelfGatewayBaseUrl,
+  DECISION_MODEL_REQUEST_HEADER,
   TOOL_SELECTION_NONE,
 } = await import("../../../open-sse/services/jev/index.ts");
 
@@ -211,6 +214,11 @@ test("askJev: parses answers, sends the wire contract, and caches identical deci
   assert.equal(sentBody.state, "state-a");
   assert.equal(sentBody.model, "jev-latest");
   assert.deepEqual(sentBody.questions, questions);
+  assert.equal(
+    (call.init?.headers as Record<string, string> | undefined)?.[DECISION_MODEL_REQUEST_HEADER],
+    "1",
+    "typesafe wire must stamp the decision-request marker"
+  );
 });
 
 test("askJev: openai wire sends chat completions and parses fenced JSON answers", async () => {
@@ -252,6 +260,13 @@ test("askJev: openai wire sends chat completions and parses fenced JSON answers"
   assert.equal(sentBody.messages[0].role, "system");
   assert.ok(sentBody.messages[1].content.includes("state-openai"));
   assert.ok(sentBody.messages[1].content.includes("pick"));
+  assert.equal(
+    (fetchCalls[0].init?.headers as Record<string, string> | undefined)?.[
+      DECISION_MODEL_REQUEST_HEADER
+    ],
+    "1",
+    "openai wire must stamp the decision-request marker"
+  );
 });
 
 test("askJev: openai wire drops malformed content but stays non-fatal", async () => {
@@ -467,6 +482,51 @@ test("sampleText: keeps head and tail with an explicit omission marker", () => {
   assert.ok(sampled.endsWith("b"));
   assert.ok(sampled.includes("omitted"));
   assert.equal(sampleText("short", 40), "short");
+});
+
+test("isDecisionModelRequest: reads both Headers and the plain record clientRawRequest builds", () => {
+  // Header instance (the .get() path).
+  assert.equal(isDecisionModelRequest(new Headers({ "x-omniroute-decision-model": "1" })), true);
+  assert.equal(isDecisionModelRequest(new Headers({ "x-omniroute-decision-model": "0" })), false);
+  assert.equal(isDecisionModelRequest(new Headers()), false);
+
+  // Plain record — exactly what buildClientRawRequest returns
+  // (Object.fromEntries(request.headers.entries())), lower-cased keys.
+  assert.equal(
+    isDecisionModelRequest({
+      "x-omniroute-decision-model": "1",
+      "content-type": "application/json",
+    }),
+    true
+  );
+  // Mixed case must still match (record keys are normalized upstream, but a
+  // hand-built record may not be).
+  assert.equal(isDecisionModelRequest({ "X-OmniRoute-Decision-Model": "1" }), true);
+  assert.equal(isDecisionModelRequest({ "x-omniroute-decision-model": "0" }), false);
+  assert.equal(isDecisionModelRequest({ "content-type": "application/json" }), false);
+
+  assert.equal(isDecisionModelRequest(null), false);
+  assert.equal(isDecisionModelRequest(undefined), false);
+  assert.equal(isDecisionModelRequest({}), false);
+});
+
+test("isSelfGatewayBaseUrl: only loopback + the server port counts as self", () => {
+  const previousPort = process.env.PORT;
+  try {
+    delete process.env.PORT;
+    assert.equal(isSelfGatewayBaseUrl("http://127.0.0.1:20128/v1"), true);
+    assert.equal(isSelfGatewayBaseUrl("http://localhost:20128/v1"), true);
+    // A different local port is a DIFFERENT service (ollama, vLLM) — not a self-loop.
+    assert.equal(isSelfGatewayBaseUrl("http://127.0.0.1:11434/v1"), false);
+    assert.equal(isSelfGatewayBaseUrl("http://192.168.1.10:20128/v1"), false);
+    assert.equal(isSelfGatewayBaseUrl("https://api.typesafe.ai"), false);
+    process.env.PORT = "9999";
+    assert.equal(isSelfGatewayBaseUrl("http://127.0.0.1:9999/v1"), true);
+    assert.equal(isSelfGatewayBaseUrl("http://127.0.0.1:20128/v1"), false);
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+  }
 });
 
 test("answer extractors reject mismatched shapes", () => {

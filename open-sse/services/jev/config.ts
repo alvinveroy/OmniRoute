@@ -285,16 +285,32 @@ export function __resetJevRuntimeCacheForTests(): void {
 /**
  * True when the incoming request is itself a classifier call (see
  * `DECISION_MODEL_REQUEST_HEADER`); the decision lanes skip those.
+ *
+ * Accepts BOTH header shapes the call sites pass: a real `Headers` (with `.get()`)
+ * and the plain `Record<string, string>` that `buildClientRawRequest` produces via
+ * `Object.fromEntries(request.headers.entries())`. The record case is read
+ * case-insensitively by scanning entries — a `.get()`-only implementation would
+ * silently return false there and the self-loop guard would never engage. Kept
+ * inline (no import of the chatCore header helper) to preserve layering:
+ * `services/jev` must not depend on handler internals.
  */
-
 export function isDecisionModelRequest(
-  headers: { get?: (name: string) => string | null } | null | undefined
+  headers: { get?: (name: string) => string | null } | Record<string, unknown> | null | undefined
 ): boolean {
-  try {
-    return headers?.get?.(DECISION_MODEL_REQUEST_HEADER) === "1";
-  } catch {
-    return false;
+  if (!headers) return false;
+  const get = (headers as { get?: (name: string) => string | null }).get;
+  if (typeof get === "function") {
+    try {
+      if (get.call(headers, DECISION_MODEL_REQUEST_HEADER) === "1") return true;
+    } catch {
+      // fall through to the record scan
+    }
   }
+  const record = headers as Record<string, unknown>;
+  for (const [name, value] of Object.entries(record)) {
+    if (name.toLowerCase() === DECISION_MODEL_REQUEST_HEADER && value === "1") return true;
+  }
+  return false;
 }
 
 /**
