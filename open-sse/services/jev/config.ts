@@ -105,7 +105,7 @@ const TIMEOUT_MAX_MS = 300_000;
 
 /** Last out-of-range timeout value we warned about, so a bad env warns ONCE
  *  (readJevEnvConfig runs on every hot-path gate, not just the 60 s refresh). */
-let lastWarnedTimeoutValue: string | null = null;
+let lastWarnedTimeoutValue: string | null | undefined = null;
 
 /**
  * Parse `OMNIROUTE_JEV_TIMEOUT_MS`, CLAMPING an out-of-range value instead of

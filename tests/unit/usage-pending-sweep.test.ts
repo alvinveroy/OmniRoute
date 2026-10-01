@@ -7,6 +7,7 @@ const {
   getPendingRequests,
   sweepStalePendingRequests,
   getMaxPendingRequestAgeMs,
+  getPendingRetainedBytes,
   finalizePendingRequestById,
   updatePendingRequestById,
   clearPendingRequests,
@@ -14,6 +15,60 @@ const {
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
+
+test("pending map is bounded by RETAINED BYTES, not just the 5000-entry count cap", () => {
+  clearPendingRequests();
+  assert.equal(getPendingRetainedBytes(), 0, "cleared state retains nothing");
+
+  // Payloads pass through protectPendingPreview, so a retained entry is capped at
+  // the preview bounds: depth 6, 24 object keys, 12 array items, 1200-char
+  // strings. One worst-case entry is tens of KB, not the multi-MB of a raw
+  // request. Build entries at that shape so the test exercises the real ceiling
+  // rather than an unreachable one.
+  const worstCaseString = "x".repeat(1200);
+  const worstCaseArray = Array.from({ length: 12 }, () => ({
+    role: "user",
+    content: worstCaseString,
+  }));
+  const worstCaseObject = Object.fromEntries(
+    Array.from({ length: 24 }, (_, i) => [`key${i}`, worstCaseArray])
+  );
+  const meta = () => ({
+    clientRequest: worstCaseObject,
+    providerRequest: worstCaseObject,
+    providerResponse: worstCaseObject,
+    clientResponse: worstCaseObject,
+  });
+
+  const CEILING = 256 * 1024 * 1024;
+  const before = getPendingRetainedBytes();
+  trackPendingRequest("m", "p", "warm", true, meta());
+  const perEntry = getPendingRetainedBytes() - before;
+  assert.ok(perEntry > 4096, `a worst-case entry must retain >4KB (got ${perEntry})`);
+
+  // Enough entries to blow through 256 MB (past the 5000-entry count cap too).
+  const target = Math.ceil(CEILING / perEntry) + 200;
+  for (let i = 0; i < target; i++) {
+    trackPendingRequest("m", "p", `conn-${i}`, true, meta());
+  }
+
+  const retained = getPendingRetainedBytes();
+  assert.ok(
+    retained <= CEILING,
+    `retained bytes ${retained} must stay under the ${CEILING} ceiling`
+  );
+  assert.ok(
+    getPendingById().size < target,
+    `entries must be evicted under pressure (kept ${getPendingById().size}/${target})`
+  );
+  assert.ok(getPendingById().size > 0, "the ceiling must not wipe in-flight requests entirely");
+  // Counters self-heal: the map and the dashboard buckets stay consistent.
+  const counted = getPendingRequests().byModel["m (p)"];
+  assert.equal(counted, getPendingById().size, "pending counts must match the map after eviction");
+
+  clearPendingRequests();
+  assert.equal(getPendingRetainedBytes(), 0, "clear resets retained bytes");
+});
 
 test("sweepStalePendingRequests marks over-age pending details and keeps counts", () => {
   clearPendingRequests();
@@ -150,8 +205,16 @@ test("trackPendingRequest reuses the same id across a combo's target-attempt ret
   });
 
   assert.equal(secondId, firstId, "retry attempt must reuse the first attempt's id");
-  assert.equal(getPendingById().has(firstId), true, "reused id is live again under the new attempt");
-  assert.equal(getPendingById().get(firstId)?.model, "model-b", "entry reflects the NEW attempt's target");
+  assert.equal(
+    getPendingById().has(firstId),
+    true,
+    "reused id is live again under the new attempt"
+  );
+  assert.equal(
+    getPendingById().get(firstId)?.model,
+    "model-b",
+    "entry reflects the NEW attempt's target"
+  );
 
   clearPendingRequests();
 });
