@@ -13,6 +13,7 @@
  * returns `null`, callers no-op.
  */
 import { logger } from "../../utils/logger.ts";
+import { DECISION_MODEL_REQUEST_HEADER } from "./types.ts";
 import type { JevFeature } from "./types.ts";
 import type { DecisionWire } from "./adapters.ts";
 
@@ -50,6 +51,8 @@ export interface JevEnvConfig {
   timeoutMs: number;
   features: JevFeatureFlags;
   blockThreshold: number;
+  /** Opt-in to a classifier endpoint on OmniRoute's own gateway (recursion hazard). */
+  allowSelfLoop: boolean;
 }
 
 export interface JevRuntime {
@@ -126,6 +129,9 @@ export function readJevEnvConfig(env: EnvLike = process.env): JevEnvConfig {
     timeoutMs: parseTimeoutMs(env.OMNIROUTE_JEV_TIMEOUT_MS),
     features: parseJevFeatures(env.OMNIROUTE_JEV_FEATURES),
     blockThreshold: parseBlockThreshold(env.OMNIROUTE_JEV_BLOCK_THRESHOLD),
+    allowSelfLoop:
+      env.OMNIROUTE_JEV_ALLOW_SELF === "1" ||
+      env.OMNIROUTE_JEV_ALLOW_SELF?.toLowerCase() === "true",
   };
 }
 
@@ -235,6 +241,18 @@ export async function resolveJevRuntime(): Promise<JevRuntime | null> {
   if (!resolvedBaseUrl && wire === "typesafe") resolvedBaseUrl = DEFAULT_JEV_BASE_URL;
   const model = env.model ?? (wire === "typesafe" ? DEFAULT_JEV_MODEL : null);
 
+  // Self-loop guard: a classifier pointed back at OmniRoute's own gateway would
+  // re-enter the routing/compression lanes on every nested request and classify
+  // itself. Refuse unless the operator explicitly opts in.
+  if (resolvedBaseUrl && isSelfGatewayBaseUrl(resolvedBaseUrl) && env.allowSelfLoop !== true) {
+    log.warn(
+      "Decision-model base URL points at OmniRoute's own gateway; refusing to avoid classifier recursion (set OMNIROUTE_JEV_ALLOW_SELF=1 to override)",
+      { baseUrl: resolvedBaseUrl }
+    );
+    runtimeCache = { at: now, value: null };
+    return null;
+  }
+
   const value: JevRuntime | null =
     apiKey && resolvedBaseUrl && model
       ? {
@@ -262,4 +280,39 @@ export async function resolveJevRuntime(): Promise<JevRuntime | null> {
 
 export function __resetJevRuntimeCacheForTests(): void {
   runtimeCache = null;
+}
+
+/**
+ * True when the incoming request is itself a classifier call (see
+ * `DECISION_MODEL_REQUEST_HEADER`); the decision lanes skip those.
+ */
+
+export function isDecisionModelRequest(
+  headers: { get?: (name: string) => string | null } | null | undefined
+): boolean {
+  try {
+    return headers?.get?.(DECISION_MODEL_REQUEST_HEADER) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when a base URL points at OmniRoute's own gateway (loopback + the
+ * server port). Self-loop classifier endpoints are refused unless
+ * `OMNIROUTE_JEV_ALLOW_SELF=1`: the nested request re-enters the gateway, and
+ * every lane that classifies would issue another classifier call.
+ */
+export function isSelfGatewayBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    const loopback =
+      host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+    if (!loopback) return false;
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    return port === (process.env.PORT?.trim() || "20128");
+  } catch {
+    return false;
+  }
 }

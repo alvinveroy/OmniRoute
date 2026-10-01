@@ -299,8 +299,15 @@ export function getJevClientStats(): Readonly<JevClientStats> {
 export function __resetJevClientForTests(): void {
   answerCache.clear();
   consecutiveFailures = 0;
-  for (const key of Object.keys(stats) as Array<keyof JevClientStats>) {
-    (stats as Record<string, unknown>)[key] =
-      key === "lastLatencyMs" || key === "lastFailureAt" || key === "breakerOpenUntil" ? null : 0;
-  }
+  stats.calls = 0;
+  stats.served = 0;
+  stats.cachedHits = 0;
+  stats.skippedNoCredential = 0;
+  stats.failures = 0;
+  stats.retries = 0;
+  stats.breakerRejections = 0;
+  stats.totalLatencyMs = 0;
+  stats.lastLatencyMs = null;
+  stats.lastFailureAt = null;
+  stats.breakerOpenUntil = null;
 }

@@ -23,6 +23,7 @@
  * consumes the same `JevAnswer` shapes regardless of the underlying model.
  */
 import { z } from "zod";
+import { DECISION_MODEL_REQUEST_HEADER } from "./types.ts";
 import type { JevAnswer, JevQuestion, JevUsage } from "./types.ts";
 
 export type DecisionWire = "typesafe" | "openai";
@@ -58,8 +59,8 @@ export interface DecisionAdapter {
   parseResponse(body: unknown, fallbackModel: string): ParsedDecisionResponse;
 }
 
-const numberMapSchema = z.record(z.number());
-const stringMapSchema = z.record(z.string());
+const numberMapSchema = z.record(z.string(), z.number());
+const stringMapSchema = z.record(z.string(), z.string());
 
 /** Clamp to [0, 1]; non-finite input yields null. */
 function clampUnit(value: unknown): number | null {
@@ -130,8 +131,8 @@ export function alignAnswersToQuestions(
 
 const TypesafeResponseSchema = z.object({
   model: z.string().optional(),
-  answers: z.record(z.unknown()).optional(),
-  usage: z.record(z.unknown()).optional(),
+  answers: z.record(z.string(), z.unknown()).optional(),
+  usage: z.record(z.string(), z.unknown()).optional(),
 });
 
 const typesafeAdapter: DecisionAdapter = {
@@ -142,6 +143,7 @@ const typesafeAdapter: DecisionAdapter = {
       headers: {
         Authorization: `Bearer ${runtime.apiKey}`,
         "Content-Type": "application/json",
+        [DECISION_MODEL_REQUEST_HEADER]: "1",
       },
       body: JSON.stringify({ state, model: runtime.model, questions }),
     };
@@ -207,9 +209,9 @@ const OpenAiResponseSchema = z.object({
       })
     )
     .optional(),
-  usage: z.record(z.unknown()).optional(),
+  usage: z.record(z.string(), z.unknown()).optional(),
 });
-const OpenAiContentSchema = z.object({ answers: z.record(z.unknown()).optional() });
+const OpenAiContentSchema = z.object({ answers: z.record(z.string(), z.unknown()).optional() });
 
 function readMessageText(body: z.infer<typeof OpenAiResponseSchema>): string | null {
   const message = body.choices?.[0]?.message;
@@ -234,6 +236,7 @@ const openaiAdapter: DecisionAdapter = {
       headers: {
         Authorization: `Bearer ${runtime.apiKey}`,
         "Content-Type": "application/json",
+        [DECISION_MODEL_REQUEST_HEADER]: "1",
       },
       body: JSON.stringify({
         model: runtime.model,

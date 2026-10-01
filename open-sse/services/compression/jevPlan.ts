@@ -253,6 +253,8 @@ export interface ResolveCompressionPlanWithJevInput {
   /** Provider/model used to resolve the model context limit for adaptive planning. */
   provider?: string | null;
   model?: string | null;
+  /** True for a classifier call itself: the decision layer must never refine it. */
+  suppressDecisionLayer?: boolean;
   log?: AdjustCompressionPlanInput["log"];
 }
 
@@ -301,7 +303,7 @@ export async function resolveCompressionPlanWithJev(
     body: input.body,
     estimatedTokens: input.estimatedTokens,
     header: input.header,
-    adaptiveEngaged: telemetry != null,
+    adaptiveEngaged: telemetry != null || input.suppressDecisionLayer === true,
     log: input.log,
   });
   return {

@@ -64,7 +64,7 @@ const JevDecideInputSchema = z.object({
   criteria: z.unknown().optional(),
 });
 
-const ChoiceCriteriaSchema = z.record(z.string());
+const ChoiceCriteriaSchema = z.record(z.string(), z.string());
 const ScoreCriteriaSchema = z.array(z.string()).min(2);
 const NoulCriteriaSchema = z.object({
   true: z.string().optional(),

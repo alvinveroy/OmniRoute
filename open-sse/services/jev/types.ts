@@ -63,3 +63,10 @@ export interface JevLogger {
   warn?: (tag: string, message: string, meta?: Record<string, unknown> | null) => void;
   error?: (tag: string, message: string, meta?: Record<string, unknown> | null) => void;
 }
+
+/**
+ * Header stamped on every classifier request. The gateway's decision lanes skip
+ * requests carrying it, so a classifier pointed at OmniRoute's own gateway
+ * cannot classify its own classification calls.
+ */
+export const DECISION_MODEL_REQUEST_HEADER = "x-omniroute-decision-model";

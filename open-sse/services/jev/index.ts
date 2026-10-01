@@ -79,3 +79,6 @@ export type {
   JevResult,
   JevUsage,
 } from "./types.ts";
+
+export { DECISION_MODEL_REQUEST_HEADER } from "./types.ts";
+export { isDecisionModelRequest, isSelfGatewayBaseUrl } from "./config.ts";
