@@ -103,19 +103,25 @@ export function parseJevFeatures(raw: string | undefined): JevFeatureFlags {
 const TIMEOUT_MIN_MS = 250;
 const TIMEOUT_MAX_MS = 300_000;
 
+/** Last out-of-range timeout value we warned about, so a bad env warns ONCE
+ *  (readJevEnvConfig runs on every hot-path gate, not just the 60 s refresh). */
+let lastWarnedTimeoutValue: string | null = null;
+
 /**
  * Parse `OMNIROUTE_JEV_TIMEOUT_MS`, CLAMPING an out-of-range value instead of
  * silently discarding it. The old behavior returned the 4 s default for any
  * value outside 250-60000, so an operator asking for a slow-by-design classifier
  * (e.g. an LLM behind the gateway, which legitimately needs 20-60 s) got 4 s and
- * an unexplained fail-open. Clamping keeps the request working and warns once
- * per distinct bad value.
+ * an unexplained fail-open. Clamping keeps the request working; the warning is
+ * deduped per distinct value so a hot-path gate can't turn it into log spam.
  */
 function parseTimeoutMs(raw: string | undefined): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return DEFAULT_JEV_TIMEOUT_MS;
-  const clamped = Math.min(Math.max(Math.floor(parsed), TIMEOUT_MIN_MS), TIMEOUT_MAX_MS);
-  if (clamped !== Math.floor(parsed)) {
+  const floor = Math.floor(parsed);
+  const clamped = Math.min(Math.max(floor, TIMEOUT_MIN_MS), TIMEOUT_MAX_MS);
+  if (clamped !== floor && lastWarnedTimeoutValue !== raw) {
+    lastWarnedTimeoutValue = raw;
     log.warn(
       `OMNIROUTE_JEV_TIMEOUT_MS=${raw} is out of range (${TIMEOUT_MIN_MS}-${TIMEOUT_MAX_MS} ms); clamped to ${clamped}ms`,
       { requested: raw, clamped }
@@ -298,6 +304,7 @@ export async function resolveJevRuntime(): Promise<JevRuntime | null> {
 
 export function __resetJevRuntimeCacheForTests(): void {
   runtimeCache = null;
+  lastWarnedTimeoutValue = null;
 }
 
 /**

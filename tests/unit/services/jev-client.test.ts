@@ -540,9 +540,9 @@ test("OMNIROUTE_JEV_TIMEOUT_MS: in-range honored, out-of-range CLAMPED (not sile
     assert.equal(readJevEnvConfig().timeoutMs, 45000, "in-range honored");
 
     // A slow-by-design classifier (LLM behind the gateway) legitimately wants
-    // more than the old 60 s ceiling: clamp up, do not fall back to 4 s.
+    // more than the OLD 60 s ceiling: honored, not silently cut to 4 s.
     process.env.OMNIROUTE_JEV_TIMEOUT_MS = "120000";
-    assert.equal(readJevEnvConfig().timeoutMs, 120_000, "above old ceiling -> clamped to value");
+    assert.equal(readJevEnvConfig().timeoutMs, 120_000, "above old ceiling -> honored as-is");
 
     process.env.OMNIROUTE_JEV_TIMEOUT_MS = "999999";
     assert.equal(readJevEnvConfig().timeoutMs, 300_000, "absurd value -> max clamp");
@@ -555,6 +555,39 @@ test("OMNIROUTE_JEV_TIMEOUT_MS: in-range honored, out-of-range CLAMPED (not sile
   } finally {
     if (previous === undefined) delete process.env.OMNIROUTE_JEV_TIMEOUT_MS;
     else process.env.OMNIROUTE_JEV_TIMEOUT_MS = previous;
+    __resetJevRuntimeCacheForTests();
+  }
+});
+
+test("clamp warning is deduped per distinct value (hot-path gates re-parse every call)", () => {
+  const previous = process.env.OMNIROUTE_JEV_TIMEOUT_MS;
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(String(args[0]));
+  };
+  try {
+    __resetJevRuntimeCacheForTests();
+    // Must be OUT OF RANGE to warn: 120000 is inside the 250-300000 window now.
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "999999";
+    // readJevEnvConfig is called on EVERY hot-path gate, not just the 60s cache refresh.
+    for (let i = 0; i < 5; i += 1) readJevEnvConfig();
+    const clampWarnings = warnings.filter((w) => w.includes("is out of range"));
+    assert.equal(clampWarnings.length, 1, "same bad value must warn exactly once");
+
+    // A different bad value warns again.
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "10";
+    readJevEnvConfig();
+    assert.equal(
+      warnings.filter((w) => w.includes("is out of range")).length,
+      2,
+      "a different bad value warns"
+    );
+  } finally {
+    console.warn = originalWarn;
+    if (previous === undefined) delete process.env.OMNIROUTE_JEV_TIMEOUT_MS;
+    else process.env.OMNIROUTE_JEV_TIMEOUT_MS = previous;
+    __resetJevRuntimeCacheForTests();
   }
 });
 
