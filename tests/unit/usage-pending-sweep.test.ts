@@ -10,6 +10,7 @@ const {
   getPendingRetainedBytes,
   finalizePendingRequestById,
   updatePendingRequestById,
+  updatePendingRequest,
   clearPendingRequests,
 } = await import("../../src/lib/usage/usageHistory.ts");
 
@@ -65,6 +66,69 @@ test("pending map is bounded by RETAINED BYTES, not just the 5000-entry count ca
   // Counters self-heal: the map and the dashboard buckets stay consistent.
   const counted = getPendingRequests().byModel["m (p)"];
   assert.equal(counted, getPendingById().size, "pending counts must match the map after eviction");
+
+  clearPendingRequests();
+  assert.equal(getPendingRetainedBytes(), 0, "clear resets retained bytes");
+});
+
+test("UPDATE path measures payloads (regression: the ceiling must not no-op in production)", () => {
+  clearPendingRequests();
+
+  const worstCaseString = "x".repeat(1200);
+  const worstCaseArray = Array.from({ length: 12 }, () => ({
+    role: "user",
+    content: worstCaseString,
+  }));
+  const worstCaseObject = Object.fromEntries(
+    Array.from({ length: 24 }, (_, i) => [`key${i}`, worstCaseArray])
+  );
+
+  // Path 1: updatePendingRequestById (targets one exact id).
+  const idA = trackPendingRequest("m", "p", "c-a", true);
+  assert.ok(idA, "id tracked");
+  const afterInsertA = getPendingRetainedBytes();
+  assert.ok(afterInsertA < 4096, `a bare entry retains almost nothing (got ${afterInsertA})`);
+  updatePendingRequestById(idA, { providerResponse: worstCaseObject });
+  const afterById = getPendingRetainedBytes();
+  assert.ok(
+    afterById > afterInsertA + 10_000,
+    `updatePendingRequestById must be measured (insert ${afterInsertA} -> ${afterById})`
+  );
+
+  // Path 2: updatePendingRequest (targets the LAST entry of one account/model
+  // bucket) — a different connection, so it is a genuinely different entry.
+  const idB = trackPendingRequest("m", "p", "c-b", true);
+  assert.ok(idB, "second id tracked");
+  const beforeBucket = getPendingRetainedBytes();
+  updatePendingRequest("m", "p", "c-b", { providerResponse: worstCaseObject });
+  const afterBucket = getPendingRetainedBytes();
+  assert.ok(
+    afterBucket > beforeBucket + 10_000,
+    `updatePendingRequest must be measured (${beforeBucket} -> ${afterBucket})`
+  );
+
+  // Replacing the same field with the same size must not double-count.
+  updatePendingRequest("m", "p", "c-b", { providerResponse: worstCaseObject });
+  assert.equal(getPendingRetainedBytes(), afterBucket, "replacing a payload must not accumulate");
+
+  // Enough entries to exceed the ceiling, each fattened through the update path.
+  const CEILING = 256 * 1024 * 1024;
+  const perEntry = afterById - afterInsertA;
+  const extra = Math.ceil(CEILING / perEntry) + 50;
+  for (let i = 0; i < extra; i++) {
+    const nextId = trackPendingRequest("m", "p", `c${i}`, true);
+    assert.ok(nextId);
+    updatePendingRequestById(nextId, { providerResponse: worstCaseObject });
+  }
+  assert.ok(
+    getPendingRetainedBytes() > CEILING,
+    `the map should now exceed the ceiling (retained ${getPendingRetainedBytes()})`
+  );
+  trackPendingRequest("m", "p", "c-trigger", true);
+  assert.ok(
+    getPendingRetainedBytes() <= CEILING,
+    `ceiling must reclaim on insert (retained ${getPendingRetainedBytes()})`
+  );
 
   clearPendingRequests();
   assert.equal(getPendingRetainedBytes(), 0, "clear resets retained bytes");

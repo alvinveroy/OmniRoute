@@ -535,13 +535,20 @@ export function updatePendingRequest(
   const details = pendingRequests.details[connectionId]?.[modelKey];
   if (!details?.length) return;
   const lastIdx = details.length - 1;
+  // providerRequest / providerResponse / clientResponse land HERE, on an
+  // already-tracked entry, not on insert. Without re-measuring, the running total
+  // undercounts and the byte ceiling silently stops enforcing in production.
+  const before = pendingDetailBytes(details[lastIdx]);
   Object.assign(details[lastIdx], normalizePendingMetadata(metadata));
+  totalPendingDetailBytes += pendingDetailBytes(details[lastIdx]) - before;
 }
 
 export function updatePendingRequestById(id: string | null, metadata: PendingRequestMetadata) {
   const detail = id ? pendingById.get(id) : null;
   if (!detail) return false;
+  const before = pendingDetailBytes(detail);
   Object.assign(detail, normalizePendingMetadata(metadata));
+  totalPendingDetailBytes += pendingDetailBytes(detail) - before;
   return true;
 }
 
