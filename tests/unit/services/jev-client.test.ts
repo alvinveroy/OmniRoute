@@ -42,7 +42,51 @@ const {
   readJevEnvConfig,
   DECISION_MODEL_REQUEST_HEADER,
   TOOL_SELECTION_NONE,
+  // The routing lane's surface is asserted in the barrel test below via its own
+  // import, so it is deliberately not destructured here.
 } = await import("../../../open-sse/services/jev/index.ts");
+
+test("barrel exports the whole decision surface (routing lane + every *Input type)", async () => {
+  // Guards a real gap: the routing lane was implemented but never re-exported,
+  // so its helpers were only reachable via a deep "./routing.ts" import.
+  const surface = await import("../../../open-sse/services/jev/index.ts");
+  for (const name of [
+    "askJev",
+    "decideRoute",
+    "decideCompression",
+    "decideCacheRead",
+    "decideToolInput",
+    "decideToolOutput",
+    "decideToolSelection",
+    "decideWorkflowStep",
+    "decideRouteForRequest",
+    "escalateHintWithJev",
+    "filterTargetsByJevSafety",
+    "readSafetyExclusions",
+    "isDecisionModelRequest",
+    "isSelfGatewayBaseUrl",
+  ]) {
+    assert.equal(typeof surface[name], "function", `${name} must be exported from the barrel`);
+  }
+  assert.equal(
+    typeof surface.JEV_SAFETY_RISK_MIN,
+    "number",
+    "JEV_SAFETY_RISK_MIN must be exported"
+  );
+  assert.equal(
+    surface.DECISION_MODEL_REQUEST_HEADER,
+    "x-omniroute-decision-model",
+    "the marker constant must be exported"
+  );
+  assert.equal(surface.DECISION_ADAPTERS && typeof surface.DECISION_ADAPTERS.openai, "object");
+  // Type-only exports cannot be asserted at runtime; a tsc-level import below
+  // keeps them honest.
+  const typeCheck: import("../../../open-sse/services/jev/index.ts").ToolSelectionDecisionInput = {
+    query: "q",
+    candidates: [{ name: "n", description: "d" }],
+  };
+  assert.deepEqual(typeCheck.candidates[0], { name: "n", description: "d" });
+});
 
 type FetchCall = { url: string; init: RequestInit | undefined };
 let fetchCalls: FetchCall[] = [];

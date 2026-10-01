@@ -68,9 +68,18 @@ export {
   type ToolOutputDecisionInput,
   type ToolSelectionCandidate,
   type ToolSelectionDecision,
+  type ToolSelectionDecisionInput,
   type WorkflowStepDecision,
   type WorkflowStepDecisionInput,
 } from "./decisions.ts";
+export {
+  decideRouteForRequest,
+  escalateHintWithJev,
+  filterTargetsByJevSafety,
+  readSafetyExclusions,
+  JEV_SAFETY_RISK_MIN,
+  type JevRoutingLogger,
+} from "./routing.ts";
 export type {
   JevAnswer,
   JevFeature,
