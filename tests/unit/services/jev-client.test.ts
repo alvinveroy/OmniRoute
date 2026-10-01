@@ -39,6 +39,7 @@ const {
   resolveChatCompletionsUrl,
   isDecisionModelRequest,
   isSelfGatewayBaseUrl,
+  readJevEnvConfig,
   DECISION_MODEL_REQUEST_HEADER,
   TOOL_SELECTION_NONE,
 } = await import("../../../open-sse/services/jev/index.ts");
@@ -526,6 +527,34 @@ test("isSelfGatewayBaseUrl: only loopback + the server port counts as self", () 
   } finally {
     if (previousPort === undefined) delete process.env.PORT;
     else process.env.PORT = previousPort;
+  }
+});
+
+test("OMNIROUTE_JEV_TIMEOUT_MS: in-range honored, out-of-range CLAMPED (not silently dropped)", () => {
+  const previous = process.env.OMNIROUTE_JEV_TIMEOUT_MS;
+  try {
+    delete process.env.OMNIROUTE_JEV_TIMEOUT_MS;
+    assert.equal(readJevEnvConfig().timeoutMs, 4000, "unset -> default");
+
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "45000";
+    assert.equal(readJevEnvConfig().timeoutMs, 45000, "in-range honored");
+
+    // A slow-by-design classifier (LLM behind the gateway) legitimately wants
+    // more than the old 60 s ceiling: clamp up, do not fall back to 4 s.
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "120000";
+    assert.equal(readJevEnvConfig().timeoutMs, 120_000, "above old ceiling -> clamped to value");
+
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "999999";
+    assert.equal(readJevEnvConfig().timeoutMs, 300_000, "absurd value -> max clamp");
+
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "10";
+    assert.equal(readJevEnvConfig().timeoutMs, 250, "tiny value -> min clamp");
+
+    process.env.OMNIROUTE_JEV_TIMEOUT_MS = "not-a-number";
+    assert.equal(readJevEnvConfig().timeoutMs, 4000, "unparseable -> default");
+  } finally {
+    if (previous === undefined) delete process.env.OMNIROUTE_JEV_TIMEOUT_MS;
+    else process.env.OMNIROUTE_JEV_TIMEOUT_MS = previous;
   }
 });
 
