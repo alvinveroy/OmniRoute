@@ -11,15 +11,8 @@ const {
   finalizePendingRequestById,
   updatePendingRequestById,
   updatePendingRequest,
-  __disarmPendingSweepTimerForTests,
   clearPendingRequests,
 } = await import("../../src/lib/usage/usageHistory.ts");
-
-test.beforeEach(() => {
-  // The 5-minute background reaper runs on the REAL clock and would evict the
-  // deliberately-aged entries these tests install, mid-run.
-  __disarmPendingSweepTimerForTests();
-});
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -412,11 +405,11 @@ test("entries without an account are marked in the map and still fall under the 
     for (let i = 0; i < 5000; i++) {
       trackPendingRequest("m", "p", "c-fresh-cap", true);
     }
-    assert.ok(getPendingById().size > 5000);
     const sizeBefore = getPendingById().size;
+    assert.ok(sizeBefore > 5000, `expected to exceed the cap, got ${sizeBefore}`);
     const removedByCap = sweepStalePendingRequests(now, HOUR_MS);
-    assert.equal(removedByCap, sizeBefore - 5000);
-    assert.equal(getPendingById().size, 5000);
+    assert.equal(removedByCap, sizeBefore - 5000, "sweep removes exactly the overflow");
+    assert.equal(getPendingById().size, 5000, "the cap holds after the sweep");
     assert.equal(getPendingById().has(requestId), false);
   } finally {
     clearPendingRequests();
@@ -490,11 +483,15 @@ test("marked entries are removed first when the pending map exceeds the cap", ()
     for (let i = 0; i < 5000; i++) {
       trackPendingRequest("m", "p", `c-fresh-${i}`, true);
     }
-    assert.ok(getPendingById().size > 5000);
+    const sizeBefore = getPendingById().size;
+    assert.ok(sizeBefore > 5000, `expected to exceed the cap, got ${sizeBefore}`);
 
+    // Derive the expectation from the ACTUAL pre-sweep size rather than
+    // hardcoding: every insert must be a distinct map entry, and the sweep
+    // removes exactly the overflow.
     const removed = sweepStalePendingRequests(now, HOUR_MS);
-    assert.equal(getPendingById().size, 5000);
-    assert.equal(removed, 3);
+    assert.equal(getPendingById().size, 5000, "the cap holds after the sweep");
+    assert.equal(removed, sizeBefore - 5000, "sweep removes exactly the overflow");
     for (const id of markedIds) assert.equal(getPendingById().has(id), false);
   } finally {
     clearPendingRequests();

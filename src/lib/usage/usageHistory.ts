@@ -320,18 +320,6 @@ export function getMaxPendingRequestAgeMs(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_PENDING_REQUEST_AGE_MS;
 }
 
-/**
- * Disarm the background reaper (test-only). The 5-minute interval is armed by
- * the first started request and calls `sweepStalePendingRequests()` on the REAL
- * clock, so a suite that installs deliberately-aged entries can have them
- * evicted underneath it when a run happens to cross the interval boundary —
- * the source of the long-standing flake in usage-pending-sweep.test.ts.
- */
-export function __disarmPendingSweepTimerForTests(): void {
-  clearInterval(_pendingSweepTimer);
-  _pendingSweepTimer = null;
-}
-
 function ensurePendingSweepTimer(): void {
   if (_pendingSweepTimer || typeof setInterval !== "function") return;
   _pendingSweepTimer = setInterval(() => {
