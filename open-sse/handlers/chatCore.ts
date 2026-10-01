@@ -1743,7 +1743,7 @@ async function handleChatCoreInner({
       let adaptiveTelemetry:
         import("../services/compression/adaptiveCompression/types.ts").AdaptiveTelemetry | null =
         null;
-      const compressionPlan = selectCompressionPlan(
+      let compressionPlan = selectCompressionPlan(
         config,
         compressionComboKey,
         estimatedTokens,
@@ -1759,6 +1759,30 @@ async function handleChatCoreInner({
           },
         }
       );
+      // Jev decision layer (opt-in, fail-open): refine the resolved plan BELOW every
+      // operator layer — a header/combo/profile plan is never touched, an engaged
+      // adaptive context-budget escalation is never overridden, and lossy candidates
+      // still pass through the lossy policy. Any failure leaves the plan identical.
+      try {
+        const { adjustCompressionPlanWithJev } =
+          await import("../services/compression/jevPlan.ts");
+        const adjusted = await adjustCompressionPlanWithJev({
+          plan: compressionPlan,
+          config,
+          body: compressionInputBody,
+          estimatedTokens,
+          header: compressionHeader,
+          adaptiveEngaged: adaptiveTelemetry != null,
+          log,
+        });
+        compressionPlan = adjusted.plan;
+        config = adjusted.config;
+      } catch (err) {
+        log?.debug?.(
+          "COMPRESSION",
+          "Jev plan adjustment skipped: " + (err instanceof Error ? err.message : String(err))
+        );
+      }
       const mode = compressionPlan.mode as CompressionConfig["defaultMode"];
       if (adaptiveTelemetry && adaptiveTelemetry.fit === false) {
         log?.warn?.(

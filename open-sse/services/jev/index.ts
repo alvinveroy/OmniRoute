@@ -12,6 +12,19 @@ export {
   type AskJevOptions,
 } from "./client.ts";
 export {
+  DECISION_ADAPTERS,
+  alignAnswersToQuestions,
+  resolveDecisionWire,
+  resolveChatCompletionsUrl,
+  extractJsonObject,
+  OPENAI_DECISION_SYSTEM_PROMPT,
+  type DecisionAdapter,
+  type DecisionAdapterRequest,
+  type DecisionWire,
+  type DecisionWireRuntime,
+  type ParsedDecisionResponse,
+} from "./adapters.ts";
+export {
   isJevFeatureEnabled,
   resolveJevRuntime,
   readJevEnvConfig,

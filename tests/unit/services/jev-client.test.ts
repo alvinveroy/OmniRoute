@@ -9,6 +9,8 @@ const JEV_ENV_KEYS = [
   "OMNIROUTE_JEV_ENABLED",
   "OMNIROUTE_JEV_API_KEY",
   "OMNIROUTE_JEV_BASE_URL",
+  "OMNIROUTE_JEV_WIRE",
+  "OMNIROUTE_JEV_PROVIDER",
   "OMNIROUTE_JEV_MODEL",
   "OMNIROUTE_JEV_TIMEOUT_MS",
   "OMNIROUTE_JEV_FEATURES",
@@ -33,6 +35,8 @@ const {
   sampleText,
   noulProbability,
   choiceLabel,
+  alignAnswersToQuestions,
+  resolveChatCompletionsUrl,
   TOOL_SELECTION_NONE,
 } = await import("../../../open-sse/services/jev/index.ts");
 
@@ -107,7 +111,64 @@ test("resolveJevRuntime: env credential resolves with defaults", async () => {
   assert.equal(runtime.apiKey, "test-key");
   assert.equal(runtime.baseUrl, "https://jev.test");
   assert.equal(runtime.model, "jev-latest");
+  assert.equal(runtime.wire, "typesafe");
   assert.equal(runtime.blockThreshold, 0.9);
+});
+
+test("resolveJevRuntime: openai wire without a model stays inert until the model is set", async () => {
+  useCredential();
+  process.env.OMNIROUTE_JEV_WIRE = "openai";
+  assert.equal(await resolveJevRuntime(), null);
+
+  process.env.OMNIROUTE_JEV_MODEL = "my-classifier";
+  __resetJevRuntimeCacheForTests();
+  const runtime = await resolveJevRuntime();
+  assert.ok(runtime);
+  assert.equal(runtime.wire, "openai");
+  assert.equal(runtime.model, "my-classifier");
+});
+
+test("resolveJevRuntime: a non-typesafe provider selects the openai wire and its registry base URL", async () => {
+  process.env.OMNIROUTE_JEV_PROVIDER = "groq";
+  process.env.OMNIROUTE_JEV_API_KEY = "test-key";
+  process.env.OMNIROUTE_JEV_MODEL = "llama-3.1-8b-instant";
+  const runtime = await resolveJevRuntime();
+  assert.ok(runtime);
+  assert.equal(runtime.wire, "openai");
+  assert.ok(runtime.baseUrl.includes("groq"));
+});
+
+test("resolveChatCompletionsUrl tolerates roots, /v1 roots and full paths", () => {
+  assert.equal(resolveChatCompletionsUrl("https://x.test"), "https://x.test/v1/chat/completions");
+  assert.equal(
+    resolveChatCompletionsUrl("https://x.test/v1"),
+    "https://x.test/v1/chat/completions"
+  );
+  assert.equal(
+    resolveChatCompletionsUrl("https://x.test/v1/chat/completions"),
+    "https://x.test/v1/chat/completions"
+  );
+});
+
+test("alignAnswersToQuestions: missing confidence defaults to 0, invalid answers are dropped", () => {
+  const answers = alignAnswersToQuestions(
+    {
+      a: { choice: "lite" },
+      b: { noul: 2 },
+      c: { nonsense: true },
+      d: { noul: "0.4" },
+    },
+    {
+      a: { type: "choice", instructions: "", criteria: { lite: "x" } },
+      b: { type: "noul", instructions: "" },
+      c: { type: "noul", instructions: "" },
+      d: { type: "noul", instructions: "" },
+    }
+  );
+  assert.equal(choiceLabel(answers.a)?.confidence, 0);
+  assert.equal(noulProbability(answers.b), 1);
+  assert.equal(answers.c, undefined);
+  assert.equal(noulProbability(answers.d), 0.4);
 });
 
 // ---------------------------------------------------------------------------
@@ -150,6 +211,59 @@ test("askJev: parses answers, sends the wire contract, and caches identical deci
   assert.equal(sentBody.state, "state-a");
   assert.equal(sentBody.model, "jev-latest");
   assert.deepEqual(sentBody.questions, questions);
+});
+
+test("askJev: openai wire sends chat completions and parses fenced JSON answers", async () => {
+  useCredential();
+  process.env.OMNIROUTE_JEV_WIRE = "openai";
+  process.env.OMNIROUTE_JEV_MODEL = "my-classifier";
+  globalThis.fetch = (async (...args: unknown[]) => {
+    fetchCalls.push({ url: String(args[0]), init: args[1] as RequestInit });
+    return jsonResponse({
+      model: "my-classifier",
+      usage: { prompt_tokens: 210, completion_tokens: 40 },
+      choices: [
+        {
+          message: {
+            content:
+              '```json\n{"answers":{"q":{"noul":0.7},"pick":{"choice":"lite","confidence":0.8}}}\n```',
+          },
+        },
+      ],
+    });
+  }) as typeof fetch;
+
+  const result = await askJev("state-openai", {
+    q: { type: "noul", instructions: "Is it?" },
+    pick: { type: "choice", instructions: "Which?", criteria: { lite: "a", rtk: "b" } },
+  });
+  assert.ok(result);
+  assert.equal(result.model, "my-classifier");
+  assert.equal(noulProbability(result.answers.q), 0.7);
+  assert.equal(choiceLabel(result.answers.pick)?.label, "lite");
+  assert.equal(fetchCalls[0].url, "https://jev.test/v1/chat/completions");
+  const sentBody = JSON.parse(String(fetchCalls[0].init?.body)) as {
+    model: string;
+    temperature: number;
+    messages: Array<{ role: string; content: string }>;
+  };
+  assert.equal(sentBody.model, "my-classifier");
+  assert.equal(sentBody.temperature, 0);
+  assert.equal(sentBody.messages[0].role, "system");
+  assert.ok(sentBody.messages[1].content.includes("state-openai"));
+  assert.ok(sentBody.messages[1].content.includes("pick"));
+});
+
+test("askJev: openai wire drops malformed content but stays non-fatal", async () => {
+  useCredential();
+  process.env.OMNIROUTE_JEV_WIRE = "openai";
+  process.env.OMNIROUTE_JEV_MODEL = "my-classifier";
+  globalThis.fetch = (async () =>
+    jsonResponse({ choices: [{ message: { content: "sorry, no JSON here" } }] })) as typeof fetch;
+
+  const result = await askJev("state-bad-json", { q: { type: "noul", instructions: "?" } });
+  assert.ok(result);
+  assert.equal(result.answers.q, undefined);
 });
 
 test("askJev: retries transient 5xx then succeeds", async () => {

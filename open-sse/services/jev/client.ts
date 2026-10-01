@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import { logger } from "../../utils/logger.ts";
 import { resolveJevRuntime } from "./config.ts";
+import { DECISION_ADAPTERS, alignAnswersToQuestions, type DecisionWire } from "./adapters.ts";
 import type { JevAnswer, JevQuestion, JevResult, JevUsage } from "./types.ts";
 
 const log = logger("JEV");
@@ -126,17 +127,11 @@ function sleep(ms: number): Promise<void> {
   return promise;
 }
 
-type ParsedBody = {
-  model?: unknown;
-  answers?: unknown;
-  usage?: unknown;
-};
-
 class RetryableFailure extends Error {}
 
 /** One network attempt. Throws `RetryableFailure` for transient failures. */
 async function attemptDecide(
-  runtime: { apiKey: string; baseUrl: string; model: string },
+  runtime: { apiKey: string; baseUrl: string; model: string; wire: DecisionWire },
   state: string,
   questions: Record<string, JevQuestion>,
   timeoutMs: number,
@@ -148,15 +143,19 @@ async function attemptDecide(
       ? AbortSignal.any([timeoutSignal, callerSignal])
       : timeoutSignal;
 
+  const adapter = DECISION_ADAPTERS[runtime.wire];
+  const request = adapter.buildRequest(
+    { baseUrl: runtime.baseUrl, apiKey: runtime.apiKey, model: runtime.model, wire: runtime.wire },
+    state,
+    questions
+  );
+
   let response: Response;
   try {
-    response = await fetch(`${runtime.baseUrl}/v1/systemone`, {
+    response = await fetch(request.url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${runtime.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ state, model: runtime.model, questions }),
+      headers: request.headers,
+      body: request.body,
       signal,
     });
   } catch (error) {
@@ -174,23 +173,19 @@ async function attemptDecide(
     throw new Error(`upstream ${response.status}: ${body.slice(0, 200)}`);
   }
 
-  let body: ParsedBody;
+  let body: unknown;
   try {
-    body = (await response.json()) as ParsedBody;
+    body = await response.json();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new RetryableFailure(`unparseable JSON: ${detail}`);
   }
 
-  const answers =
-    body.answers && typeof body.answers === "object"
-      ? (body.answers as Record<string, JevAnswer>)
-      : {};
-  const usage = body.usage && typeof body.usage === "object" ? (body.usage as JevUsage) : undefined;
+  const parsed = adapter.parseResponse(body, runtime.model);
   return {
-    model: typeof body.model === "string" ? body.model : runtime.model,
-    answers,
-    usage,
+    model: parsed.model,
+    answers: alignAnswersToQuestions(parsed.rawAnswers, questions),
+    usage: parsed.usage,
   };
 }
 
@@ -259,6 +254,7 @@ export async function askJev(
           apiKey: runtime.apiKey,
           baseUrl: runtime.baseUrl,
           model,
+          wire: runtime.wire,
         },
         boundedState,
         questions,

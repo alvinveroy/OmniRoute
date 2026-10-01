@@ -1,14 +1,20 @@
 /**
- * Jev configuration: env contract, feature lanes and runtime credential
- * resolution (env first, then the dashboard-managed `typesafe` provider
- * connection in the SQLite store).
+ * Decision-model configuration: env contract, feature lanes and runtime
+ * credential resolution.
  *
- * Fail-open contract: every surface that consults Jev keeps its historical
- * behavior when this module cannot resolve a credential — the runtime
- * resolver returns `null`, callers no-op.
+ * The lane is provider-agnostic: it can run against TypeSafe's System One wire
+ * (the default) or any OpenAI-compatible classifier endpoint — either given
+ * explicitly (`OMNIROUTE_JEV_BASE_URL` + `OMNIROUTE_JEV_MODEL`) or derived from
+ * an existing OmniRoute provider connection (`OMNIROUTE_JEV_PROVIDER=<id>`),
+ * whose stored base URL and credential are reused.
+ *
+ * Fail-open contract: every surface that consults the decision model keeps its
+ * historical behavior when this module cannot resolve a runtime — the resolver
+ * returns `null`, callers no-op.
  */
 import { logger } from "../../utils/logger.ts";
 import type { JevFeature } from "./types.ts";
+import type { DecisionWire } from "./adapters.ts";
 
 const log = logger("JEV");
 
@@ -35,8 +41,12 @@ export type JevEnabledMode = "auto" | "on" | "off";
 export interface JevEnvConfig {
   enabledMode: JevEnabledMode;
   apiKey: string | null;
-  baseUrl: string;
-  model: string;
+  baseUrl: string | null;
+  /** Explicit wire override; null = derive from the provider (typesafe default). */
+  wire: DecisionWire | null;
+  /** Provider id whose connection supplies the base URL (+ key fallback). */
+  providerId: string | null;
+  model: string | null;
   timeoutMs: number;
   features: JevFeatureFlags;
   blockThreshold: number;
@@ -46,6 +56,7 @@ export interface JevRuntime {
   apiKey: string;
   baseUrl: string;
   model: string;
+  wire: DecisionWire;
   timeoutMs: number;
   blockThreshold: number;
 }
@@ -57,6 +68,11 @@ function parseEnabledMode(raw: string | undefined): JevEnabledMode {
   if (value === "0" || value === "false" || value === "off") return "off";
   if (value === "1" || value === "true" || value === "on") return "on";
   return "auto";
+}
+
+function parseWire(raw: string | undefined): DecisionWire | null {
+  const value = raw?.trim().toLowerCase();
+  return value === "typesafe" || value === "openai" ? value : null;
 }
 
 function isKnownFeature(token: string): token is JevFeature {
@@ -93,17 +109,20 @@ function parseBlockThreshold(raw: string | undefined): number {
   return DEFAULT_JEV_BLOCK_THRESHOLD;
 }
 
+function stripTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
 export function readJevEnvConfig(env: EnvLike = process.env): JevEnvConfig {
-  const apiKey = env.OMNIROUTE_JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim() || null;
-  const baseUrl =
-    env.OMNIROUTE_JEV_BASE_URL?.trim().replace(/\/+$/, "") ||
-    env.TYPESAFE_BASE_URL?.trim().replace(/\/+$/, "") ||
-    DEFAULT_JEV_BASE_URL;
+  const baseUrlRaw = env.OMNIROUTE_JEV_BASE_URL?.trim();
+  const providerId = env.OMNIROUTE_JEV_PROVIDER?.trim();
   return {
     enabledMode: parseEnabledMode(env.OMNIROUTE_JEV_ENABLED),
-    apiKey,
-    baseUrl,
-    model: env.OMNIROUTE_JEV_MODEL?.trim() || DEFAULT_JEV_MODEL,
+    apiKey: env.OMNIROUTE_JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim() || null,
+    baseUrl: baseUrlRaw ? stripTrailingSlashes(baseUrlRaw) : null,
+    wire: parseWire(env.OMNIROUTE_JEV_WIRE),
+    providerId: providerId || null,
+    model: env.OMNIROUTE_JEV_MODEL?.trim() || null,
     timeoutMs: parseTimeoutMs(env.OMNIROUTE_JEV_TIMEOUT_MS),
     features: parseJevFeatures(env.OMNIROUTE_JEV_FEATURES),
     blockThreshold: parseBlockThreshold(env.OMNIROUTE_JEV_BLOCK_THRESHOLD),
@@ -126,11 +145,19 @@ const RUNTIME_NEGATIVE_TTL_MS = 15_000;
 
 let runtimeCache: { at: number; value: JevRuntime | null } | null = null;
 
+interface DecisionConnection {
+  apiKey: string | null;
+  baseUrl: string | null;
+}
+
 /**
- * Read the dashboard-managed `typesafe` provider connection credential.
- * Lazy DB import keeps this service out of client/most server import graphs.
+ * Read a provider connection's credential + base URL. The row wins; the static
+ * provider registry supplies the base URL when the row stores none (built-in
+ * providers). Lazy imports keep this service out of client import graphs.
  */
-async function readTypesafeConnectionKey(): Promise<string | null> {
+async function readDecisionConnection(providerId: string): Promise<DecisionConnection | null> {
+  let apiKey: string | null = null;
+  let baseUrl: string | null = null;
   try {
     const { getDbInstance } = await import("../../../src/lib/db/core.ts");
     const { decrypt, isEncryptionEnabled } = await import("../../../src/lib/db/encryption.ts");
@@ -139,24 +166,52 @@ async function readTypesafeConnectionKey(): Promise<string | null> {
     };
     const row = db
       .prepare(
-        "SELECT api_key FROM provider_connections WHERE provider = 'typesafe' AND is_active = 1 LIMIT 1"
+        "SELECT api_key, base_url FROM provider_connections WHERE provider = ? AND is_active = 1 LIMIT 1"
       )
-      .get() as { api_key?: unknown } | undefined;
-    const raw = row?.api_key;
-    if (typeof raw !== "string" || raw.length === 0) return null;
-    const value = isEncryptionEnabled() ? decrypt(raw, { quiet: true }) : raw;
-    return typeof value === "string" && value.length > 0 ? value : null;
+      .get(providerId) as { api_key?: unknown; base_url?: unknown } | undefined;
+    const rawKey = row?.api_key;
+    if (typeof rawKey === "string" && rawKey.length > 0) {
+      const value = isEncryptionEnabled() ? decrypt(rawKey, { quiet: true }) : rawKey;
+      apiKey = typeof value === "string" && value.length > 0 ? value : null;
+    }
+    const rawBase = row?.base_url;
+    if (typeof rawBase === "string" && rawBase.trim().length > 0) {
+      baseUrl = stripTrailingSlashes(rawBase.trim());
+    }
   } catch {
-    // Missing DB, missing table or decrypt failure all reduce to "no credential".
-    return null;
+    // Missing DB, missing table or decrypt failure all reduce to "no row data".
   }
+
+  if (!baseUrl) {
+    try {
+      const { REGISTRY } = await import("../../config/providers/index.ts");
+      const entry = REGISTRY[providerId];
+      if (entry && typeof entry.baseUrl === "string" && entry.baseUrl.length > 0) {
+        baseUrl = stripTrailingSlashes(entry.baseUrl);
+      }
+    } catch {
+      // Registry unavailable — baseUrl stays null.
+    }
+  }
+
+  if (!apiKey && !baseUrl) return null;
+  return { apiKey, baseUrl };
 }
 
 /**
  * Resolve the runtime credential + connection settings. Returns `null` when the
- * master switch is off or no credential is available (fail-open for callers).
- * Results are memoized (positive 60s / negative 15s) so hot paths never hit the
- * DB per request.
+ * master switch is off or the configuration is incomplete (fail-open for
+ * callers). Results are memoized (positive 60s / negative 15s) so hot paths
+ * never hit the DB per request.
+ *
+ * Resolution order:
+ *   - key:      OMNIROUTE_JEV_API_KEY || TYPESAFE_API_KEY || connection key
+ *   - base URL: OMNIROUTE_JEV_BASE_URL || (explicit provider) connection/registry
+ *               || the typesafe default (typesafe wire only)
+ *   - wire:     OMNIROUTE_JEV_WIRE || (non-typesafe provider ? "openai" : "typesafe")
+ *   - model:    OMNIROUTE_JEV_MODEL || "jev-latest" (typesafe wire only — an
+ *               OpenAI-compatible classifier endpoint always needs an explicit
+ *               model id)
  */
 export async function resolveJevRuntime(): Promise<JevRuntime | null> {
   const env = readJevEnvConfig();
@@ -168,22 +223,39 @@ export async function resolveJevRuntime(): Promise<JevRuntime | null> {
     if (now - runtimeCache.at < ttl) return runtimeCache.value;
   }
 
-  const apiKey = env.apiKey ?? (await readTypesafeConnectionKey());
-  const value: JevRuntime | null = apiKey
-    ? {
-        apiKey,
-        baseUrl: env.baseUrl,
-        model: env.model,
-        timeoutMs: env.timeoutMs,
-        blockThreshold: env.blockThreshold,
-      }
-    : null;
+  // The typesafe row is consulted for the key even without an explicit provider
+  // (dashboard-managed credentials); an explicit provider additionally supplies
+  // its base URL.
+  const connection = await readDecisionConnection(env.providerId ?? "typesafe");
+  const apiKey = env.apiKey ?? connection?.apiKey ?? null;
+  const wire: DecisionWire =
+    env.wire ?? (env.providerId && env.providerId !== "typesafe" ? "openai" : "typesafe");
+  let resolvedBaseUrl: string | null = env.baseUrl;
+  if (!resolvedBaseUrl && env.providerId && connection) resolvedBaseUrl = connection.baseUrl;
+  if (!resolvedBaseUrl && wire === "typesafe") resolvedBaseUrl = DEFAULT_JEV_BASE_URL;
+  const model = env.model ?? (wire === "typesafe" ? DEFAULT_JEV_MODEL : null);
+
+  const value: JevRuntime | null =
+    apiKey && resolvedBaseUrl && model
+      ? {
+          apiKey,
+          baseUrl: resolvedBaseUrl,
+          model,
+          wire,
+          timeoutMs: env.timeoutMs,
+          blockThreshold: env.blockThreshold,
+        }
+      : null;
+
   runtimeCache = { at: now, value };
   if (!value && env.enabledMode === "on") {
-    log.warn(
-      "Jev is enabled (OMNIROUTE_JEV_ENABLED=on) but no credential resolved; decisions stay inert",
-      { hasEnvKey: Boolean(env.apiKey) }
-    );
+    log.warn("Decision model is enabled but the configuration is incomplete; lanes stay inert", {
+      hasKey: Boolean(apiKey),
+      hasBaseUrl: Boolean(resolvedBaseUrl),
+      hasModel: Boolean(model),
+      wire,
+      providerId: env.providerId ?? null,
+    });
   }
   return value;
 }
