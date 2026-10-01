@@ -23,7 +23,16 @@ import { decideCompression, type CompressionDecision } from "../jev/decisions.ts
 import { normalizeConversationForEmbedding } from "../cache/embeddingClient.ts";
 import { applyLossyRequestPolicy } from "./lossyRequestPolicy.ts";
 import type { DerivedPlan } from "./deriveDefaultPlan.ts";
-import { DEFAULT_RTK_CONFIG, type CompressionConfig, type RtkConfig } from "./types.ts";
+import { selectCompressionPlan } from "./strategySelector.ts";
+import { getTokenLimit } from "../contextManager.ts";
+import type { CachingDetectionContext } from "./cachingAware.ts";
+import type { AdaptiveTelemetry } from "./adaptiveCompression/types.ts";
+import {
+  DEFAULT_RTK_CONFIG,
+  type CompressionConfig,
+  type CompressionPipelineStep,
+  type RtkConfig,
+} from "./types.ts";
 
 export const JEV_LOW_BENEFIT_SKIP_THRESHOLD = 0.8;
 export const JEV_PREFERRED_CONFIDENCE_MIN = 0.7;
@@ -231,4 +240,74 @@ export async function adjustCompressionPlanWithJev(
   }
 
   return { plan, config, adjustment };
+}
+
+export interface ResolveCompressionPlanWithJevInput {
+  config: CompressionConfig;
+  comboId: string | null;
+  estimatedTokens: number;
+  body: Record<string, unknown>;
+  context?: CachingDetectionContext;
+  combos?: Record<string, CompressionPipelineStep[]>;
+  header: string | null;
+  /** Provider/model used to resolve the model context limit for adaptive planning. */
+  provider?: string | null;
+  model?: string | null;
+  log?: AdjustCompressionPlanInput["log"];
+}
+
+export interface ResolveCompressionPlanWithJevResult {
+  plan: DerivedPlan;
+  config: CompressionConfig;
+  adjustment: JevCompressionAdjustment | null;
+  /** Adaptive context-budget telemetry, for the caller's budget warning. */
+  telemetry: AdaptiveTelemetry | null;
+}
+
+/**
+ * Resolve the effective compression plan and, when the Jev lane applies, refine
+ * it — the chatCore entry point. Owns the adaptive context-budget inputs
+ * (model context window, request max_tokens) and observes its telemetry: any
+ * adaptive engagement suppresses the Jev adjustment, so a safety escalation is
+ * never overridden. Fail-open at every step.
+ */
+export async function resolveCompressionPlanWithJev(
+  input: ResolveCompressionPlanWithJevInput
+): Promise<ResolveCompressionPlanWithJevResult> {
+  const requestMaxTokens =
+    typeof input.body?.max_tokens === "number" ? (input.body.max_tokens as number) : null;
+  const modelContextLimit =
+    input.provider && input.model ? getTokenLimit(input.provider, input.model) : null;
+  let telemetry: AdaptiveTelemetry | null = null;
+  const plan = selectCompressionPlan(
+    input.config,
+    input.comboId,
+    input.estimatedTokens,
+    input.body,
+    input.context,
+    input.combos,
+    input.header,
+    {
+      modelContextLimit,
+      requestMaxTokens,
+      onAdaptive: (t) => {
+        telemetry = t;
+      },
+    }
+  );
+  const adjusted = await adjustCompressionPlanWithJev({
+    plan,
+    config: input.config,
+    body: input.body,
+    estimatedTokens: input.estimatedTokens,
+    header: input.header,
+    adaptiveEngaged: telemetry != null,
+    log: input.log,
+  });
+  return {
+    plan: adjusted.plan,
+    config: adjusted.config,
+    adjustment: adjusted.adjustment,
+    telemetry,
+  };
 }

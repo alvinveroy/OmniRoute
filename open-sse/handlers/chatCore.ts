@@ -1481,7 +1481,6 @@ async function handleChatCoreInner({
     try {
       const {
         selectCompressionStrategy,
-        selectCompressionPlan,
         enginesMapDerivesStackedPipeline,
         activeComboResolves,
         applyCompressionAsync,
@@ -1490,6 +1489,8 @@ async function handleChatCoreInner({
         buildNamedComboLookup,
         formatCompressionAnnotation,
       } = await import("../services/compression/strategySelector.ts");
+      const { resolveCompressionPlanWithJev } =
+        await import("../services/compression/jevPlan.ts");
       const { trackCompressionStats } = await import("../services/compression/stats.ts");
       let config: CompressionConfig = compressionSettings ?? createDisabledCompressionConfig();
       if (compressionExcluded || !apiKeyCompressionEnabled) {
@@ -1732,57 +1733,23 @@ async function handleChatCoreInner({
         }
       }
       const compressionInputBody = body as Record<string, unknown>;
-      // Adaptive context-budget (Sub-project C): model context window + request max_tokens drive
-      // the budget target. getTokenLimit is already imported; provider/effectiveModel resolved above.
-      const adaptiveModelContextLimit =
-        provider && effectiveModel ? getTokenLimit(provider, effectiveModel) : null;
-      const requestMaxTokens =
-        typeof (compressionInputBody as Record<string, unknown>)?.max_tokens === "number"
-          ? ((compressionInputBody as Record<string, unknown>).max_tokens as number)
-          : null;
-      let adaptiveTelemetry:
-        import("../services/compression/adaptiveCompression/types.ts").AdaptiveTelemetry | null =
-        null;
-      let compressionPlan = selectCompressionPlan(
+      // Adaptive context-budget (Sub-project C) + Jev refinement are resolved in one
+      // place; operator layers and engaged adaptive escalations always win.
+      const compressionResolution = await resolveCompressionPlanWithJev({
         config,
-        compressionComboKey,
+        comboId: compressionComboKey,
         estimatedTokens,
-        compressionInputBody,
-        { provider, targetFormat, model: effectiveModel, connectionCacheOverride },
-        namedCombos,
-        compressionHeader,
-        {
-          modelContextLimit: adaptiveModelContextLimit,
-          requestMaxTokens: requestMaxTokens,
-          onAdaptive: (t) => {
-            adaptiveTelemetry = t;
-          },
-        }
-      );
-      // Jev decision layer (opt-in, fail-open): refine the resolved plan BELOW every
-      // operator layer — a header/combo/profile plan is never touched, an engaged
-      // adaptive context-budget escalation is never overridden, and lossy candidates
-      // still pass through the lossy policy. Any failure leaves the plan identical.
-      try {
-        const { adjustCompressionPlanWithJev } =
-          await import("../services/compression/jevPlan.ts");
-        const adjusted = await adjustCompressionPlanWithJev({
-          plan: compressionPlan,
-          config,
-          body: compressionInputBody,
-          estimatedTokens,
-          header: compressionHeader,
-          adaptiveEngaged: adaptiveTelemetry != null,
-          log,
-        });
-        compressionPlan = adjusted.plan;
-        config = adjusted.config;
-      } catch (err) {
-        log?.debug?.(
-          "COMPRESSION",
-          "Jev plan adjustment skipped: " + (err instanceof Error ? err.message : String(err))
-        );
-      }
+        body: compressionInputBody,
+        context: { provider, targetFormat, model: effectiveModel, connectionCacheOverride },
+        combos: namedCombos,
+        header: compressionHeader,
+        provider,
+        model: effectiveModel,
+        log,
+      });
+      let compressionPlan = compressionResolution.plan;
+      config = compressionResolution.config;
+      const adaptiveTelemetry = compressionResolution.telemetry;
       const mode = compressionPlan.mode as CompressionConfig["defaultMode"];
       if (adaptiveTelemetry && adaptiveTelemetry.fit === false) {
         log?.warn?.(

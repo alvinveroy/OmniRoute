@@ -43,6 +43,7 @@ import { startMcpHeartbeat } from "./runtimeHeartbeat.ts";
 import { countUniqueMcpTools } from "./toolCount.ts";
 import { z } from "zod";
 import { closeAuditDb, logToolCall } from "./audit.ts";
+import { withJevToolGuard } from "./jevGuard.ts";
 import {
   evaluateToolScopes,
   resolveCallerScopeContext,
@@ -772,7 +773,8 @@ export function createMcpServer(options?: CreateMcpServerOptions): McpServer {
           return result;
         }
       : handler;
-    const registered = registerTool(name, metadata, filteredHandler as never);
+    const guardedHandler = withJevToolGuard(name, filteredHandler as never);
+    const registered = registerTool(name, metadata, guardedHandler as never);
     if (toolProfile && reduceToolManifest([{ name, scopes: [] }], toolProfile).length === 0) {
       // Denied by the cardinality profile: keep the registration valid but disable it so the tool
       // is not announced in tools/list (token savings). The default profile never reaches here.
