@@ -240,6 +240,9 @@ const MAX_PENDING_DETAIL_BYTES = 256 * 1024 * 1024;
  */
 let totalPendingDetailBytes = 0;
 
+/** Monotonic suffix making pending ids unique even inside one millisecond. */
+let pendingIdSequence = 0;
+
 /** Recursive retained-size estimate (string bytes + fixed per-node overhead). */
 function estimatePendingBytes(value: unknown, seen = new WeakSet<object>()): number {
   if (value === null || value === undefined) return 0;
@@ -315,6 +318,18 @@ export function getMaxPendingRequestAgeMs(
 ): number {
   const parsed = Number.parseInt(rawValue ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_PENDING_REQUEST_AGE_MS;
+}
+
+/**
+ * Disarm the background reaper (test-only). The 5-minute interval is armed by
+ * the first started request and calls `sweepStalePendingRequests()` on the REAL
+ * clock, so a suite that installs deliberately-aged entries can have them
+ * evicted underneath it when a run happens to cross the interval boundary —
+ * the source of the long-standing flake in usage-pending-sweep.test.ts.
+ */
+export function __disarmPendingSweepTimerForTests(): void {
+  clearInterval(_pendingSweepTimer);
+  _pendingSweepTimer = null;
 }
 
 function ensurePendingSweepTimer(): void {
@@ -477,7 +492,18 @@ export function trackPendingRequest(
         // crypto RNG (not Math.random) to satisfy CodeQL js/insecure-randomness —
         // this pending-request id flows into attempt logging; it's a correlation
         // id, not a security secret.
-        id: reusableId ?? `${now}-${globalThis.crypto.randomUUID().slice(0, 6)}`,
+        // A pending id must be unique across CONCURRENT requests, and thousands can
+        // be tracked inside one millisecond. The old `${now}-${uuid.slice(0,6)}`
+        // form had only a 24-bit random suffix, so a 5,000-request burst collided
+        // ~52% of the time (birthday bound); `pendingById.set` then silently
+        // overwrote the earlier entry, so a live request's pending row vanished
+        // from the map while its bucket still listed it. Keep the timestamp for
+        // ordering/readability, and add a monotonic counter + full random bytes.
+        id:
+          reusableId ??
+          `${now}-${(globalThis.crypto.randomUUID() as string).replace(/-/g, "").slice(0, 12)}-${(++pendingIdSequence).toString(
+            36
+          )}`,
         model,
         provider,
         connectionId,

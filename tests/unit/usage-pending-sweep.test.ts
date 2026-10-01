@@ -11,8 +11,15 @@ const {
   finalizePendingRequestById,
   updatePendingRequestById,
   updatePendingRequest,
+  __disarmPendingSweepTimerForTests,
   clearPendingRequests,
 } = await import("../../src/lib/usage/usageHistory.ts");
+
+test.beforeEach(() => {
+  // The 5-minute background reaper runs on the REAL clock and would evict the
+  // deliberately-aged entries these tests install, mid-run.
+  __disarmPendingSweepTimerForTests();
+});
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -69,6 +76,28 @@ test("pending map is bounded by RETAINED BYTES, not just the 5000-entry count ca
 
   clearPendingRequests();
   assert.equal(getPendingRetainedBytes(), 0, "clear resets retained bytes");
+});
+
+test("pending ids are unique across a large burst (regression: 24-bit suffix collided ~52%)", () => {
+  clearPendingRequests();
+  // 5000 requests tracked inside one millisecond. With the old
+  // `${now}-${uuid.slice(0,6)}` id the 24-bit suffix collided by the birthday
+  // bound ~52% of the time, and `pendingById.set` overwrote a LIVE request's
+  // entry (the map lost one while its bucket kept both).
+  const COUNT = 5000;
+  const ids = new Set<string>();
+  for (let i = 0; i < COUNT; i++) {
+    const id = trackPendingRequest("m", "p", "c-burst", true);
+    assert.ok(id, "id returned");
+    ids.add(id);
+  }
+  assert.equal(ids.size, COUNT, "every insert must yield a unique id");
+  assert.equal(
+    getPendingById().size,
+    COUNT,
+    "one insert must be exactly one map entry (no silent overwrite)"
+  );
+  clearPendingRequests();
 });
 
 test("UPDATE path measures payloads (regression: the ceiling must not no-op in production)", () => {
