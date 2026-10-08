@@ -14,7 +14,7 @@ import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveTh
 import {
   applyJevKeepaliveTuning,
   buildKeepaliveTuningKey,
-} from "../../../../../open-sse/utils/keepaliveJevTuning.ts";
+} from "@omniroute/open-sse/utils/keepaliveJevTuning";
 import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
 
 let initialized = false;

@@ -107,6 +107,8 @@ function clearJevEnv(): void {
 
 function useCredential(): void {
   process.env.OMNIROUTE_JEV_API_KEY = "test-key";
+  // #15641: the decision layer is opt-in — a credential alone engages nothing.
+  process.env.OMNIROUTE_JEV_ENABLED = "on";
   process.env.OMNIROUTE_JEV_BASE_URL = "https://jev.test";
   process.env.OMNIROUTE_JEV_TIMEOUT_MS = "2000";
 }
@@ -143,6 +145,10 @@ test("isJevFeatureEnabled: master off kills every lane; csv subset gates individ
 
   process.env.OMNIROUTE_JEV_ENABLED = "auto";
   process.env.OMNIROUTE_JEV_FEATURES = "routing";
+  // #15641: `auto` is not an opt-in — only `on` engages a lane.
+  assert.equal(isJevFeatureEnabled("routing"), false);
+
+  process.env.OMNIROUTE_JEV_ENABLED = "on";
   assert.equal(isJevFeatureEnabled("routing"), true);
   assert.equal(isJevFeatureEnabled("mcp"), false);
 });
@@ -179,6 +185,8 @@ test("resolveJevRuntime: openai wire without a model stays inert until the model
 test("resolveJevRuntime: a non-typesafe provider selects the openai wire and its registry base URL", async () => {
   process.env.OMNIROUTE_JEV_PROVIDER = "groq";
   process.env.OMNIROUTE_JEV_API_KEY = "test-key";
+  // #15641: the decision layer is opt-in — a credential alone engages nothing.
+  process.env.OMNIROUTE_JEV_ENABLED = "on";
   process.env.OMNIROUTE_JEV_MODEL = "llama-3.1-8b-instant";
   const runtime = await resolveJevRuntime();
   assert.ok(runtime);

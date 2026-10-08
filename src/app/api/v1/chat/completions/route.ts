@@ -24,7 +24,7 @@ import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveTh
 import {
   applyJevKeepaliveTuning,
   buildKeepaliveTuningKey,
-} from "../../../../../../open-sse/utils/keepaliveJevTuning.ts";
+} from "@omniroute/open-sse/utils/keepaliveJevTuning";
 import {
   admitChatRequest,
   admitChatStructure,

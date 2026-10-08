@@ -27,7 +27,7 @@ import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveTh
 import {
   applyJevKeepaliveTuning,
   buildKeepaliveTuningKey,
-} from "../../../../../open-sse/utils/keepaliveJevTuning.ts";
+} from "@omniroute/open-sse/utils/keepaliveJevTuning";
 import { OPENAI_RESPONSES_IN_PROGRESS_FRAME } from "@omniroute/open-sse/utils/sseHeartbeat";
 
 // NOTE: We do NOT call initTranslators() here — the translator registry is

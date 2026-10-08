@@ -66,6 +66,11 @@ export interface JevRuntime {
 
 type EnvLike = Record<string, string | undefined>;
 
+/**
+ * `on` is the ONLY opt-in. `auto` (and an unset value) keeps every lane off even when a
+ * credential resolves: a TypeSafe key alone must never start sending request content to
+ * the classifier or mutating MCP tool I/O (#15641 review; Hard Rule #20 spirit).
+ */
 function parseEnabledMode(raw: string | undefined): JevEnabledMode {
   const value = raw?.trim().toLowerCase();
   if (value === "0" || value === "false" || value === "off") return "off";
@@ -141,7 +146,7 @@ function stripTrailingSlashes(value: string): string {
 }
 
 export function readJevEnvConfig(env: EnvLike = process.env): JevEnvConfig {
-  const baseUrlRaw = env.OMNIROUTE_JEV_BASE_URL?.trim();
+  const baseUrlRaw = env.OMNIROUTE_JEV_BASE_URL?.trim() || env.TYPESAFE_BASE_URL?.trim();
   const providerId = env.OMNIROUTE_JEV_PROVIDER?.trim();
   return {
     enabledMode: parseEnabledMode(env.OMNIROUTE_JEV_ENABLED),
@@ -166,7 +171,7 @@ export function readJevEnvConfig(env: EnvLike = process.env): JevEnvConfig {
  */
 export function isJevFeatureEnabled(feature: JevFeature, env: EnvLike = process.env): boolean {
   const config = readJevEnvConfig(env);
-  if (config.enabledMode === "off") return false;
+  if (config.enabledMode !== "on") return false;
   return config.features[feature] === true;
 }
 
@@ -189,27 +194,21 @@ async function readDecisionConnection(providerId: string): Promise<DecisionConne
   let apiKey: string | null = null;
   let baseUrl: string | null = null;
   try {
-    const { getDbInstance } = await import("../../../src/lib/db/core.ts");
-    const { decrypt, isEncryptionEnabled } = await import("../../../src/lib/db/encryption.ts");
-    const db = getDbInstance() as unknown as {
-      prepare: (sql: string) => { get: (...params: unknown[]) => unknown };
-    };
-    const row = db
-      .prepare(
-        "SELECT api_key, base_url FROM provider_connections WHERE provider = ? AND is_active = 1 LIMIT 1"
-      )
-      .get(providerId) as { api_key?: unknown; base_url?: unknown } | undefined;
-    const rawKey = row?.api_key;
-    if (typeof rawKey === "string" && rawKey.length > 0) {
-      const value = isEncryptionEnabled() ? decrypt(rawKey, { quiet: true }) : rawKey;
-      apiKey = typeof value === "string" && value.length > 0 ? value : null;
+    // Domain accessor (decrypts lazily) — no raw SQL from open-sse (#15641 review).
+    const { getProviderConnections } = await import("../../../src/lib/db/providers.ts");
+    const [connection] = await getProviderConnections({ provider: providerId, isActive: true });
+    const key = connection?.apiKey;
+    if (typeof key === "string" && key.length > 0) apiKey = key;
+    const specific = connection?.providerSpecificData as { baseUrl?: unknown } | undefined;
+    if (typeof specific?.baseUrl === "string" && specific.baseUrl.trim().length > 0) {
+      baseUrl = stripTrailingSlashes(specific.baseUrl.trim());
     }
-    const rawBase = row?.base_url;
-    if (typeof rawBase === "string" && rawBase.trim().length > 0) {
-      baseUrl = stripTrailingSlashes(rawBase.trim());
-    }
-  } catch {
-    // Missing DB, missing table or decrypt failure all reduce to "no row data".
+  } catch (error) {
+    // Missing DB or decrypt failure reduce to "no row data" (fail-open), but stay visible.
+    log.debug("Decision-model connection lookup failed; falling back to env/registry", {
+      providerId,
+      error: error instanceof Error ? error.name : typeof error,
+    });
   }
 
   if (!baseUrl) {
@@ -229,8 +228,8 @@ async function readDecisionConnection(providerId: string): Promise<DecisionConne
 }
 
 /**
- * Resolve the runtime credential + connection settings. Returns `null` when the
- * master switch is off or the configuration is incomplete (fail-open for
+ * Resolve the runtime credential + connection settings. Returns `null` unless the
+ * master switch is explicitly `on`, or when the configuration is incomplete (fail-open for
  * callers). Results are memoized (positive 60s / negative 15s) so hot paths
  * never hit the DB per request.
  *
@@ -245,7 +244,7 @@ async function readDecisionConnection(providerId: string): Promise<DecisionConne
  */
 export async function resolveJevRuntime(): Promise<JevRuntime | null> {
   const env = readJevEnvConfig();
-  if (env.enabledMode === "off") return null;
+  if (env.enabledMode !== "on") return null;
 
   const now = Date.now();
   if (runtimeCache) {

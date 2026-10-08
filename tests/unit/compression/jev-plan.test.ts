@@ -43,6 +43,8 @@ function clearJevEnv(): void {
 
 function useCredential(features = "compression"): void {
   process.env.OMNIROUTE_JEV_API_KEY = "test-key";
+  // #15641: the decision layer is opt-in — a credential alone engages nothing.
+  process.env.OMNIROUTE_JEV_ENABLED = "on";
   process.env.OMNIROUTE_JEV_BASE_URL = "https://jev.test";
   process.env.OMNIROUTE_JEV_FEATURES = features;
 }
