@@ -214,9 +214,8 @@ test("shared set size includes live REGISTRY and retired Designer + Felo + Qwen 
   // Token Market (#13191) registers id "tokenmarket" with the same alias — one more.
   // Twinmind (#14131) registers id "twinmind" and alias "tm" — two more.
   // SYNTX.ai (#14269) registers id "syntx" and alias "stx" — two more.
-  // TypeSafe (#15641) registers id "typesafe" and alias "jev" — two more.
-  // Measured on the merged tree: RESERVED_PROVIDER_PREFIXES.size = 431.
-  assert.equal(RESERVED_PREFIX_COUNT, 431);
+  // Measured on the merged tree: RESERVED_PROVIDER_PREFIXES.size = 429.
+  assert.equal(RESERVED_PREFIX_COUNT, 429);
 });
 
 test("notrack-web registry id and alias stay reserved", () => {

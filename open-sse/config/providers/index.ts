@@ -24,7 +24,6 @@ import { glmtProvider } from "./registry/glm/t/index.ts";
 import { glm_cnProvider } from "./registry/glm/cn/index.ts";
 import { agnes_cnProvider } from "./registry/agnes/cn/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
-import { typesafeProvider } from "./registry/typesafe/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
 import { lmarenaProvider } from "./registry/lmarena/index.ts";
 import { kilocodeProvider } from "./registry/kilocode/index.ts";
@@ -299,7 +298,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "adapta-web": adapta_webProvider,
   "notion-web": notion_webProvider,
   anthropic: anthropicProvider,
-  typesafe: typesafeProvider,
   sambanova: sambanovaProvider,
   upstage: upstageProvider,
   deepai: deepaiProvider,

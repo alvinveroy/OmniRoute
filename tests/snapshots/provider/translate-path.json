@@ -6013,29 +6013,6 @@
       "stream": "https://api2.twinmind.com/api/v3"
     }
   },
-  "typesafe": {
-    "format": "openai",
-    "headers": {
-      "apiKey": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      },
-      "nonStream": {
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      },
-      "oauth": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json"
-      }
-    },
-    "url": {
-      "nonStream": "https://api.typesafe.ai",
-      "stream": "https://api.typesafe.ai"
-    }
-  },
   "typhoon": {
     "format": "openai",
     "headers": {

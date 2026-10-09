@@ -393,16 +393,4 @@ export const APIKEY_PROVIDERS_INFERENCE = {
     },
     serviceKinds: ["llm"],
   },
-  typesafe: {
-    id: "typesafe",
-    serviceKinds: ["llm"],
-    alias: "jev",
-    name: "TypeSafe",
-    icon: "psychology",
-    color: "#5B21B6",
-    textIcon: "TS",
-    website: "https://typesafe.ai",
-    apiHint:
-      "TypeSafe Jev is a calibrated decision-model endpoint: authenticate with a TypeSafe API key and call https://api.typesafe.ai with the jev-latest model id.",
-  },
 };
