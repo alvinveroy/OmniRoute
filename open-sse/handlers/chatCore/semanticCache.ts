@@ -2,6 +2,7 @@ import {
   generateSignature,
   getCachedResponse,
   isCacheableForRead,
+  isExplicitCacheBypass,
   recordSemanticCacheHit,
   outputContractOf,
 } from "@/lib/semanticCache";
@@ -72,12 +73,16 @@ export async function checkSemanticCache({
   // confidence only); it can never narrow an already-allowed read, and any
   // failure keeps today's behavior (skip). `videoTranscriptSensitive` and
   // `cacheDefaultMode === "bypass"` are already handled by the early returns above.
+  // An explicit caller opt-out (`X-OmniRoute-No-Cache` / `Cache-Control:
+  // no-cache`) is an instruction, not a heuristic miss, so the widen must not
+  // rescue it either.
   let cacheableForRead =
     semanticCacheEnabled && isCacheableForRead(body, clientRawRequest?.headers);
   if (
     !cacheableForRead &&
     semanticCacheEnabled &&
-    !isDecisionModelRequest(clientRawRequest?.headers)
+    !isDecisionModelRequest(clientRawRequest?.headers) &&
+    !isExplicitCacheBypass(clientRawRequest?.headers)
   ) {
     cacheableForRead = await maybeAllowJevCacheRead({ body, model, log });
   }

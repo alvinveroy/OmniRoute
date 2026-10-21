@@ -532,17 +532,31 @@ export function getCacheStats() {
 }
 
 /**
+ * Whether the caller explicitly opted out of the semantic cache, via
+ * `X-OmniRoute-No-Cache: true` or `Cache-Control: no-cache`.
+ *
+ * This is distinct from the temperature heuristic in `isCacheableForRead`: an
+ * explicit opt-out is the caller's instruction and must never be widened into
+ * a cache hit, whereas a heuristic miss (temperature is not 0) may be.
+ */
+export function isExplicitCacheBypass(
+  headers: { get?: (name: string) => string | null } | Record<string, unknown> | null | undefined
+): boolean {
+  if ((getHeaderValue(headers, "x-omniroute-no-cache") || "").toLowerCase() === "true") {
+    return true;
+  }
+  const cacheControl = (getHeaderValue(headers, "cache-control") || "").toLowerCase();
+  return cacheControl.includes("no-cache");
+}
+
+/**
  * Check if a cached response can be served for this request.
  * Works for both streaming and non-streaming requests (cache hit returns JSON).
  * Requires explicit numeric `temperature: 0` — omitted temperature is NOT cached
  * because the provider default may be non-deterministic (e.g. random/creative tasks).
  */
 export function isCacheableForRead(body, headers) {
-  if ((getHeaderValue(headers, "x-omniroute-no-cache") || "").toLowerCase() === "true") {
-    return false;
-  }
-  const cacheControl = (getHeaderValue(headers, "cache-control") || "").toLowerCase();
-  if (cacheControl.includes("no-cache")) {
+  if (isExplicitCacheBypass(headers)) {
     return false;
   }
   if (typeof body.temperature !== "number" || body.temperature !== 0) return false;
@@ -556,11 +570,7 @@ export function isCacheableForRead(body, headers) {
  * because the provider default may be non-deterministic.
  */
 export function isCacheableForWrite(body, headers) {
-  if ((getHeaderValue(headers, "x-omniroute-no-cache") || "").toLowerCase() === "true") {
-    return false;
-  }
-  const cacheControl = (getHeaderValue(headers, "cache-control") || "").toLowerCase();
-  if (cacheControl.includes("no-cache")) {
+  if (isExplicitCacheBypass(headers)) {
     return false;
   }
   if (body.temperature !== 0) return false;
