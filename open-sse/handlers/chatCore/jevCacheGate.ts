@@ -31,13 +31,17 @@ export async function maybeAllowJevCacheRead(input: {
   const temperature = typeof input.body.temperature === "number" ? input.body.temperature : null;
 
   try {
-    const { cacheSafe } = await decideCacheRead({
+    const decision = await decideCacheRead({
       conversationText,
       temperature,
       model: input.model,
     });
+    // `decideCacheRead` returns null when the decision layer has no runtime
+    // (no credential / feature disabled / upstream failure). That is "no
+    // answer", not an error: keep today's skip without logging a failure.
+    if (!decision) return false;
     // Allow only when cacheSafe >= 0.8
-    return cacheSafe >= 0.8;
+    return decision.cacheSafe >= 0.8;
   } catch (error) {
     // Fail-open: keep today's skip (return false) on any error
     input.log?.debug?.("Jev cache read gate error:", error);
