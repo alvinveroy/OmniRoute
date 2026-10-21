@@ -94,7 +94,8 @@ fi
 git log --oneline -1
 
 # --- install dependencies inside the guard as well ------------------------
-install_cmd="npm install 2>&1 | tail -20"
+# pipefail so the unit fails when npm fails, not when `tail` succeeds.
+install_cmd="set -o pipefail; npm install 2>&1 | tail -20"
 
 # --- the guarded build ----------------------------------------------------
 # systemd-run --scope is not used: a scope cannot own the unit's lifetime for
@@ -103,7 +104,14 @@ install_cmd="npm install 2>&1 | tail -20"
 run_in_unit() {
   local phase="$1"
   local cmd="$2"
+  # --wait blocks until the unit finishes and propagates its exit status;
+  # without it systemd-run returns as soon as the unit is enqueued, so the
+  # next phase would start while this one is still running.
+  # --pipe streams the unit's stdout/stderr into ours so the build output
+  # stays visible in the wrapper's log.
   sudo -n systemd-run \
+    --wait \
+    --pipe \
     --unit="$UNIT_NAME-$phase" \
     --collect \
     --property="MemoryMax=$MEMORY_MAX" \
@@ -130,7 +138,7 @@ if [ $install_status -ne 0 ]; then
 fi
 
 echo "=== build (guarded: $MEMORY_MAX cap, $CPUS cpus, ${HEAP_MB}MB heap) ==="
-run_in_unit build "npm run build 2>&1 | tee -a '$LOG_FILE' | tail -40"
+run_in_unit build "set -o pipefail; npm run build 2>&1 | tee -a '$LOG_FILE' | tail -40"
 build_status=${PIPESTATUS[0]}
 if [ $build_status -ne 0 ]; then
   echo "[guard] build failed (status $build_status); see $LOG_FILE" >&2
@@ -138,7 +146,7 @@ if [ $build_status -ne 0 ]; then
 fi
 
 echo "=== build:cli (guarded) ==="
-run_in_unit cli "npm run build:cli 2>&1 | tee -a '$LOG_FILE' | tail -20"
+run_in_unit cli "set -o pipefail; npm run build:cli 2>&1 | tee -a '$LOG_FILE' | tail -20"
 cli_status=${PIPESTATUS[0]}
 if [ $cli_status -ne 0 ]; then
   echo "[guard] build:cli failed (status $cli_status); see $LOG_FILE" >&2
@@ -146,8 +154,17 @@ if [ $cli_status -ne 0 ]; then
 fi
 
 echo "=== pack ==="
+# Sanity-check the build outputs before packaging: a tarball without dist/
+# would install a broken server.
+for artifact in dist/server.js dist/package.json; do
+  if [ ! -e "$REPO_DIR/$artifact" ]; then
+    echo "[guard] REFUSING to pack: $artifact is missing (the build did not produce a usable bundle)" >&2
+    exit 1
+  fi
+done
+rm -f "$REPO_DIR"/omniroute-*.tgz
 npm pack 2>&1 | tail -3
-pack=$(ls -t ./*.tgz 2>/dev/null | head -1)
+pack=$(ls -t ./omniroute-*.tgz 2>/dev/null | head -1)
 if [ -z "$pack" ]; then
   echo "[guard] npm pack produced no tarball" >&2
   exit 1
