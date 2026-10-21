@@ -109,9 +109,15 @@ run_in_unit() {
   # next phase would start while this one is still running.
   # --pipe streams the unit's stdout/stderr into ours so the build output
   # stays visible in the wrapper's log.
+  # --uid/--gid keep the unit running as the invoking user. systemd-run
+  # defaults to root, which leaves root-owned node_modules behind and
+  # makes SWC's native-binding cache check reject the cache root (its
+  # parent is owned by another user).
   sudo -n systemd-run \
     --wait \
     --pipe \
+    --uid="$(id -u)" \
+    --gid="$(id -g)" \
     --unit="$UNIT_NAME-$phase" \
     --collect \
     --property="MemoryMax=$MEMORY_MAX" \
@@ -125,6 +131,7 @@ run_in_unit() {
     --setenv="OMNIROUTE_USE_TURBOPACK=0" \
     --setenv="NEXT_BUILD_CPUS=$CPUS" \
     --setenv="NODE_OPTIONS=--max-old-space-size=$HEAP_MB" \
+    --setenv="SWC_NATIVE_BINDING_CACHE=$REPO_DIR/.swc-cache" \
     --working-directory="$REPO_DIR" \
     /bin/bash -lc "$cmd"
 }
