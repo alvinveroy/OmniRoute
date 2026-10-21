@@ -346,3 +346,84 @@ test("jevCacheGate: null/empty conversation returns false", async ({}) => {
     restoreEnv(savedEnv);
   }
 });
+
+// A decision that is simply unavailable is not an error. The gate used to
+// destructure decideCacheRead's result unconditionally, but that helper
+// returns null whenever the decision layer has no answer (no runtime, or an
+// upstream failure after the client's retries are exhausted). Destructuring
+// that null threw, so the gate reported a failure for a normal condition and
+// raised an exception on the chat hot path for every request the cache
+// heuristic had already rejected.
+test("jevCacheGate: no runtime returns false without reporting an error", async ({}) => {
+  const savedEnv = resetJevEnv();
+
+  try {
+    // The cache lane is on, but there is no credential: the decision layer
+    // cannot resolve, so it has no answer to give.
+    process.env.OMNIROUTE_JEV_FEATURES = "cache";
+    __resetJevRuntimeCacheForTests();
+    __resetJevClientForTests();
+
+    let fetchCallCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCallCount++;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const debugCalls: unknown[][] = [];
+      const result = await maybeAllowJevCacheRead({
+        body: { messages: [{ role: "user", content: "test" }] },
+        model: "test-model",
+        log: { debug: (...args: unknown[]) => debugCalls.push(args) },
+      });
+
+      assert.strictEqual(result, false, "no decision -> keep today's skip");
+      assert.strictEqual(fetchCallCount, 0, "no runtime -> no upstream call");
+      assert.deepEqual(
+        debugCalls,
+        [],
+        "a missing decision is not an error and must not be reported through the error path"
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  } finally {
+    restoreEnv(savedEnv);
+  }
+});
+
+test("jevCacheGate: an upstream failure returns false without reporting an error", async ({}) => {
+  const savedEnv = resetJevEnv();
+
+  try {
+    useCredential();
+    process.env.OMNIROUTE_JEV_FEATURES = "cache";
+    __resetJevRuntimeCacheForTests();
+    __resetJevClientForTests();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 500 })) as typeof fetch;
+
+    try {
+      const debugCalls: unknown[][] = [];
+      const result = await maybeAllowJevCacheRead({
+        body: { messages: [{ role: "user", content: "test" }] },
+        model: "test-model",
+        log: { debug: (...args: unknown[]) => debugCalls.push(args) },
+      });
+
+      assert.strictEqual(result, false);
+      assert.deepEqual(
+        debugCalls,
+        [],
+        "an exhausted upstream is reported by the client, not as a gate error"
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  } finally {
+    restoreEnv(savedEnv);
+  }
+});
