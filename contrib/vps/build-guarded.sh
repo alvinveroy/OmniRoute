@@ -66,7 +66,7 @@ done
 
 export PATH="$HOME/node/bin:/usr/local/bin:/usr/bin:/bin"
 
-if [ ! -d "$REPO_DIR/.git" ]; then
+if ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   echo "not a git checkout: $REPO_DIR" >&2
   exit 1
 fi
