@@ -36,7 +36,12 @@
 
 set -o pipefail
 
-REPO_DIR="${REPO_DIR:-$HOME/OmniRoute}"
+REPO_DIR="${REPO_DIR:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -z "$REPO_DIR" ]; then
+  # contrib/vps/ -> repository root
+  REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
 BRANCH=""
 UNIT_NAME="omniroute-build-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="${LOG_FILE:-$HOME/build-guarded.log}"
@@ -67,8 +72,11 @@ if [ ! -d "$REPO_DIR/.git" ]; then
 fi
 
 # --- preflight: refuse to start a memory-hungry build on a starved box ----
-free_mb=$(awk '/^Mem:/ {print $7}' /proc/meminfo)
-swap_free_mb=$(awk '/^Swap:/ {print $4}' /proc/meminfo)
+# /proc/meminfo reports kB and, on this kernel, has no "Mem:" summary line -
+# read MemAvailable / SwapFree directly.
+mem_kb() { awk -v k="$1" '$1 == k ":" {print $2; exit}' /proc/meminfo; }
+free_mb=$(( $(mem_kb MemAvailable) / 1024 ))
+swap_free_mb=$(( $(mem_kb SwapFree) / 1024 ))
 echo "[guard] available memory: ${free_mb} MB, free swap: ${swap_free_mb} MB"
 if [ "${free_mb}" -lt "${MIN_FREE_MB}" ]; then
   echo "[guard] REFUSING to start: only ${free_mb} MB available (need ${MIN_FREE_MB} MB)." >&2
@@ -93,8 +101,10 @@ install_cmd="npm install 2>&1 | tail -20"
 # a long script, and a transient *service* lets `systemctl stop` cancel the
 # build cleanly if the operator needs to.
 run_in_unit() {
+  local phase="$1"
+  local cmd="$2"
   sudo -n systemd-run \
-    --unit="$UNIT_NAME" \
+    --unit="$UNIT_NAME-$phase" \
     --collect \
     --property="MemoryMax=$MEMORY_MAX" \
     --property="MemoryHigh=$MEMORY_HIGH" \
@@ -108,11 +118,11 @@ run_in_unit() {
     --setenv="NEXT_BUILD_CPUS=$CPUS" \
     --setenv="NODE_OPTIONS=--max-old-space-size=$HEAP_MB" \
     --working-directory="$REPO_DIR" \
-    /bin/bash -lc "$1"
+    /bin/bash -lc "$cmd"
 }
 
 echo "=== npm install (guarded) ==="
-run_in_unit "$install_cmd"
+run_in_unit install "$install_cmd"
 install_status=$?
 if [ $install_status -ne 0 ]; then
   echo "[guard] npm install failed (status $install_status)" >&2
@@ -120,7 +130,7 @@ if [ $install_status -ne 0 ]; then
 fi
 
 echo "=== build (guarded: $MEMORY_MAX cap, $CPUS cpus, ${HEAP_MB}MB heap) ==="
-run_in_unit "npm run build 2>&1 | tee -a '$LOG_FILE' | tail -40"
+run_in_unit build "npm run build 2>&1 | tee -a '$LOG_FILE' | tail -40"
 build_status=${PIPESTATUS[0]}
 if [ $build_status -ne 0 ]; then
   echo "[guard] build failed (status $build_status); see $LOG_FILE" >&2
@@ -128,7 +138,7 @@ if [ $build_status -ne 0 ]; then
 fi
 
 echo "=== build:cli (guarded) ==="
-run_in_unit "npm run build:cli 2>&1 | tee -a '$LOG_FILE' | tail -20"
+run_in_unit cli "npm run build:cli 2>&1 | tee -a '$LOG_FILE' | tail -20"
 cli_status=${PIPESTATUS[0]}
 if [ $cli_status -ne 0 ]; then
   echo "[guard] build:cli failed (status $cli_status); see $LOG_FILE" >&2
