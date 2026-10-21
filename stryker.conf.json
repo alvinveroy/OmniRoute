@@ -539,6 +539,7 @@
       "tests/unit/tools-filter-anthropic-format.test.ts",
       "tests/unit/tproxy-route.test.ts",
       "tests/unit/trae-publiccred.test.ts",
+      "tests/unit/transport-bounded-abort.test.ts",
       "tests/unit/types-barrel-model-cooldown.test.ts",
       "tests/unit/universal-quota-aware-routing.test.ts",
       "tests/unit/upstream-error-passthrough.test.ts",
