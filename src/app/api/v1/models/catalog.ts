@@ -20,6 +20,7 @@ import {
 } from "@omniroute/open-sse/config/imageRegistry";
 import { aiHordeImageCatalog } from "@omniroute/open-sse/services/aihordeImageCatalog";
 import { getAllRerankModels } from "@omniroute/open-sse/config/rerankRegistry";
+import { getDisabledRerankProviders } from "@/lib/rerank/disabledRerankProviders";
 import { getAllAudioModels } from "@omniroute/open-sse/config/audioRegistry";
 import { getAllModerationModels } from "@omniroute/open-sse/config/moderationRegistry";
 import { getAllVideoModels } from "@omniroute/open-sse/config/videoRegistry";
@@ -1606,9 +1607,15 @@ async function buildUnifiedModelsResponseCore(
     }
 
     // Add rerank models (filtered by active providers)
+    // The instance-level rerank blocklist removes a provider's rerank models
+    // from the catalog too, so the catalog never offers a model the rerank
+    // route would refuse to dispatch.
+    const disabledRerankProviders = await getDisabledRerankProviders();
     for (const rerankModel of getAllRerankModels()) {
       await maybeYieldCatalogBuild();
       if (!isProviderActive(rerankModel.provider)) continue;
+      if (disabledRerankProviders.has("*")) continue;
+      if (disabledRerankProviders.has(rerankModel.provider.toLowerCase())) continue;
       const rawModelId = getSpecialtyModelRelativeId(rerankModel.id, rerankModel.provider);
       if (!providerSupportsModel(rerankModel.provider, rawModelId)) continue;
       if (isModelHiddenBulk(rerankModel.provider, rawModelId, null, "rerank")) continue;

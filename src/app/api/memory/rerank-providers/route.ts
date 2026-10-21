@@ -7,6 +7,7 @@ import {
   mergeRerankProviderListings,
 } from "@/lib/memory/embedding/rerankListings";
 import { listProviderNodeModalityListings } from "@/lib/memory/embedding/nodeModalityListings";
+import { getDisabledRerankProviders } from "@/lib/rerank/disabledRerankProviders";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 
 /**
@@ -22,7 +23,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const curated = [];
+    // The instance-level rerank blocklist hides a disabled provider here too,
+    // so the Memory Rerank selector never offers a provider the rerank route
+    // would refuse to dispatch.
+    const disabledRerankProviders = await getDisabledRerankProviders();
     for (const [providerId, config] of Object.entries(RERANK_PROVIDERS)) {
+      if (disabledRerankProviders.has("*")) continue;
+      if (disabledRerankProviders.has(providerId.toLowerCase())) continue;
       let hasKey = false;
       try {
         const creds = await getProviderCredentials(providerId);

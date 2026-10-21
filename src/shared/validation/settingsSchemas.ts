@@ -131,6 +131,13 @@ export const updateSettingsSchema = z.object({
   baseUrl: z.string().max(500).optional(),
   setupComplete: z.boolean().optional(),
   blockedProviders: z.array(z.string().max(100)).optional(),
+  // Rerank-modality-only provider blocklist. `blockedProviders` governs the
+  // no-auth synthetic-credential path and the OpenRouter live-catalog mirror,
+  // so blocking "openrouter" there also strips the chat models this instance
+  // routes through OpenRouter. This list removes a provider from the rerank
+  // surfaces only: the /v1/rerank dispatch, the /v1/models rerank catalog
+  // entries and the Memory Rerank selector.
+  disabledRerankProviders: z.array(z.string().max(100)).optional(),
   noAuthFallbackDisabledProviders: z.array(z.string().max(100)).optional(),
   hidePaidModels: z.boolean().optional(),
   // #9418/#13562: catalog/auto-combo already consume both flags (open-sse

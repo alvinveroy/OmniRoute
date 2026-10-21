@@ -27,6 +27,7 @@ import {
   rateLimitedProviderResponse,
 } from "@/app/api/v1/_shared/rateLimit";
 import { saveCallLog } from "@/lib/usageDb";
+import { isRerankProviderDisabled } from "@/lib/rerank/disabledRerankProviders";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { CORS_HEADERS } from "@omniroute/open-sse/utils/cors.ts";
@@ -196,6 +197,14 @@ export async function handleValidatedRerankRequestBody(
   if (provider || derivedProvider) {
     // Cloud provider matched (or a generic Cohere-compatible endpoint was derived)
     const effectiveProviderId = provider || derivedProvider!.id;
+    // Instance-level blocklist: a provider the operator disabled must not be
+    // dispatched to at all (the call is metered by the provider).
+    if (await isRerankProviderDisabled(effectiveProviderId)) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `Rerank provider is disabled on this instance: ${effectiveProviderId}`
+      );
+    }
     const credentials = await getProviderCredentialsWithQuotaPreflight(
       effectiveProviderId,
       null,
