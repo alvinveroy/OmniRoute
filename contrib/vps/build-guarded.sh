@@ -44,7 +44,9 @@ if [ -z "$REPO_DIR" ]; then
 fi
 BRANCH=""
 UNIT_NAME="omniroute-build-$(date +%Y%m%d-%H%M%S)"
-LOG_FILE="${LOG_FILE:-$HOME/build-guarded.log}"
+# Keep the log inside the checkout: a $HOME log file can be owned by another
+# user (or by a previous root-run unit), and then tee fails with EACCES.
+LOG_FILE="${LOG_FILE:-}"
 
 MEMORY_MAX="${BUILD_MEMORY_MAX:-20G}"
 MEMORY_HIGH="${BUILD_MEMORY_HIGH:-16G}"
@@ -85,6 +87,10 @@ if [ "${free_mb}" -lt "${MIN_FREE_MB}" ]; then
 fi
 
 cd "$REPO_DIR" || exit 1
+
+if [ -z "$LOG_FILE" ]; then
+  LOG_FILE="$REPO_DIR/build-guarded.log"
+fi
 
 if [ -n "$BRANCH" ]; then
   echo "=== checkout ${BRANCH} ==="
