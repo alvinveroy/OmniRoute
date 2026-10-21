@@ -16,6 +16,11 @@ import { getModePack } from "../autoCombo/modePacks.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
 import { classifyWithConfig } from "../intentClassifier.ts";
+import {
+  decideRouteForRequest,
+  escalateHintWithJev,
+  filterTargetsByJevSafety,
+} from "../jev/routing.ts";
 import type { RoutingHint } from "../manifestAdapter";
 import { parseModel } from "../model.ts";
 import { supportsToolCalling } from "../modelCapabilities.ts";
@@ -277,7 +282,37 @@ export async function resolveAutoStrategyOrder(
   const prompt = extractPromptForIntent(body);
   const systemPrompt = typeof combo?.system_message === "string" ? combo.system_message : undefined;
   const intentConfig = getIntentConfig(settings, combo);
-  const intent = classifyWithConfig(prompt, intentConfig, systemPrompt);
+  const heuristicIntent = classifyWithConfig(prompt, intentConfig, systemPrompt);
+  // Jev decision layer (opt-in, fail-open): a calibrated intent overrides the
+  // keyword classifier when available; task complexity and policy risk ride on
+  // the same call. Any failure leaves the historical behavior untouched.
+  const jevRoute = await decideRouteForRequest({ prompt, systemPrompt });
+  const intent = jevRoute?.intent ?? heuristicIntent;
+  if (jevRoute) {
+    if (jevRoute.intent !== heuristicIntent) {
+      log.debug?.(
+        "COMBO",
+        `Jev intent override: heuristic=${heuristicIntent} jev=${jevRoute.intent} confidence=${jevRoute.intentConfidence} complexity=${jevRoute.complexity} safetyRisk=${jevRoute.safetyRisk}`
+      );
+    }
+    // Prime the adaptive keepalive tuner for the NEXT request with this profile
+    // (the streaming routes build the same key at entry) — this request's own
+    // keepalive wrapper started before the verdict existed.
+    try {
+      const { buildKeepaliveTuningKey, recordJevFirstBytePrediction } =
+        await import("../../utils/keepaliveJevTuning.ts");
+      recordJevFirstBytePrediction(
+        buildKeepaliveTuningKey({
+          model: typeof body?.model === "string" ? body.model : null,
+          hasTools: requestHasTools,
+        }),
+        jevRoute.longFirstByte
+      );
+    } catch {
+      // best-effort tuner priming — never affects routing
+    }
+    eligibleTargets = filterTargetsByJevSafety(eligibleTargets, jevRoute, log);
+  }
   recordComboIntent(combo.name, intent);
   const taskType = mapIntentToTaskType(intent);
 
@@ -355,9 +390,17 @@ export async function resolveAutoStrategyOrder(
   // migration 103 which stripped it as a legacy key, leaving the feature
   // permanently disabled.  The classification is lightweight (regex-only, no
   // LLM call) so always running it has negligible cost.
-  const autoManifestHint: RoutingHint | null = await buildComplexityRoutingHint(
-    eligibleTargets.filter((t) => t.kind === "model"),
-    body,
+  //
+  // JEV decision layer: when the routing lane produced a calibrated
+  // difficulty verdict, its tier floor can raise (never lower) the hint's
+  // recommended minimum tier.
+  const autoManifestHint: RoutingHint | null = escalateHintWithJev(
+    await buildComplexityRoutingHint(
+      eligibleTargets.filter((t) => t.kind === "model"),
+      body,
+      log
+    ),
+    jevRoute,
     log
   );
 

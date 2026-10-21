@@ -67,97 +67,124 @@ test.afterEach(() => {
 });
 
 test("#12656 (a) a stalled wreq body falls back to the direct dispatcher within the watchdog window", async () => {
-  await withEnv({ ENABLE_TLS_FINGERPRINT: "true", TLS_FIRST_BYTE_WATCHDOG_MS: "80" }, async () => {
-    setTlsClientForTest(
-      fakeTlsClient(
-        async () =>
-          new Response(neverYieldingBody(), {
-            status: 200,
-            headers: { "content-type": "text/event-stream" },
-          })
-      )
-    );
+  await withEnv(
+    {
+      ENABLE_TLS_FINGERPRINT: "true",
+      // Eager wreq is allowlist-gated (adaptive ladder); the provider must be
+      // listed for the watchdog to be exercised at all.
+      TLS_FINGERPRINT_PROVIDERS: "openai",
+      TLS_FIRST_BYTE_WATCHDOG_MS: "80",
+    },
+    async () => {
+      setTlsClientForTest(
+        fakeTlsClient(
+          async () =>
+            new Response(neverYieldingBody(), {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            })
+        )
+      );
 
-    let dispatcherCalls = 0;
-    const startedAt = Date.now();
-    const tracked = await runWithTlsTracking("openai", () =>
-      proxyFetch(
-        "https://example-provider.test/v1/chat/completions",
-        { method: "GET" },
-        {
-          undiciFetch: async () => {
-            dispatcherCalls++;
-            return new Response("fallback-body", { status: 200 });
-          },
-        }
-      )
-    );
-    const elapsedMs = Date.now() - startedAt;
-
-    assert.equal(dispatcherCalls, 1);
-    assert.equal(await tracked.result.text(), "fallback-body");
-    // Well under the OLD 600_000ms flat TlsClient timeout — proves the
-    // watchdog fired instead of riding the default request timeout.
-    assert.ok(elapsedMs < 5_000, `expected fast fallback, took ${elapsedMs}ms`);
-    // tlsStore.used is flipped back to false on the fallback path in
-    // proxyFetch's existing catch block, same as any other TLS failure.
-    assert.equal(tracked.tlsFingerprintUsed, false);
-  });
-});
-
-test("#12656 (b) a healthy/fast wreq body is unaffected by the watchdog", async () => {
-  await withEnv({ ENABLE_TLS_FINGERPRINT: "true", TLS_FIRST_BYTE_WATCHDOG_MS: "80" }, async () => {
-    setTlsClientForTest(fakeTlsClient(async () => new Response("healthy-body", { status: 200 })));
-
-    let dispatcherCalls = 0;
-    const tracked = await runWithTlsTracking("openai", () =>
-      proxyFetch(
-        "https://example-provider.test/v1/chat/completions",
-        { method: "GET" },
-        {
-          undiciFetch: async () => {
-            dispatcherCalls++;
-            return new Response("fallback-body", { status: 200 });
-          },
-        }
-      )
-    );
-
-    assert.equal(dispatcherCalls, 0);
-    assert.equal(await tracked.result.text(), "healthy-body");
-    assert.equal(tracked.tlsFingerprintUsed, true);
-  });
-});
-
-test("#12656 (c) a non-replay-safe POST throws on watchdog timeout instead of silently retrying", async () => {
-  await withEnv({ ENABLE_TLS_FINGERPRINT: "true", TLS_FIRST_BYTE_WATCHDOG_MS: "80" }, async () => {
-    setTlsClientForTest(
-      fakeTlsClient(
-        async () =>
-          new Response(neverYieldingBody(), {
-            status: 200,
-            headers: { "content-type": "text/event-stream" },
-          })
-      )
-    );
-
-    let dispatcherCalls = 0;
-    await assert.rejects(
-      runWithTlsTracking("openai", () =>
+      let dispatcherCalls = 0;
+      const startedAt = Date.now();
+      const tracked = await runWithTlsTracking("openai", () =>
         proxyFetch(
           "https://example-provider.test/v1/chat/completions",
-          { method: "POST", body: "{}" },
+          { method: "GET" },
           {
             undiciFetch: async () => {
               dispatcherCalls++;
-              return new Response("unexpected", { status: 200 });
+              return new Response("fallback-body", { status: 200 });
             },
           }
         )
-      ),
-      (error: Error) =>
-        error.message === "TLS fingerprint request failed; request is not safe to replay"
-    );
-    assert.equal(dispatcherCalls, 0);
-  });
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      assert.equal(dispatcherCalls, 1);
+      assert.equal(await tracked.result.text(), "fallback-body");
+      // Well under the OLD 600_000ms flat TlsClient timeout — proves the
+      // watchdog fired instead of riding the default request timeout.
+      assert.ok(elapsedMs < 5_000, `expected fast fallback, took ${elapsedMs}ms`);
+      // tlsStore.used is flipped back to false on the fallback path in
+      // proxyFetch's existing catch block, same as any other TLS failure.
+      assert.equal(tracked.tlsFingerprintUsed, false);
+    }
+  );
+});
+
+test("#12656 (b) a healthy/fast wreq body is unaffected by the watchdog", async () => {
+  await withEnv(
+    {
+      ENABLE_TLS_FINGERPRINT: "true",
+      // Eager wreq is allowlist-gated (adaptive ladder); the provider must be
+      // listed for the watchdog to be exercised at all.
+      TLS_FINGERPRINT_PROVIDERS: "openai",
+      TLS_FIRST_BYTE_WATCHDOG_MS: "80",
+    },
+    async () => {
+      setTlsClientForTest(fakeTlsClient(async () => new Response("healthy-body", { status: 200 })));
+
+      let dispatcherCalls = 0;
+      const tracked = await runWithTlsTracking("openai", () =>
+        proxyFetch(
+          "https://example-provider.test/v1/chat/completions",
+          { method: "GET" },
+          {
+            undiciFetch: async () => {
+              dispatcherCalls++;
+              return new Response("fallback-body", { status: 200 });
+            },
+          }
+        )
+      );
+
+      assert.equal(dispatcherCalls, 0);
+      assert.equal(await tracked.result.text(), "healthy-body");
+      assert.equal(tracked.tlsFingerprintUsed, true);
+    }
+  );
+});
+
+test("#12656 (c) a non-replay-safe POST throws on watchdog timeout instead of silently retrying", async () => {
+  await withEnv(
+    {
+      ENABLE_TLS_FINGERPRINT: "true",
+      // Eager wreq is allowlist-gated (adaptive ladder); the provider must be
+      // listed for the watchdog to be exercised at all.
+      TLS_FINGERPRINT_PROVIDERS: "openai",
+      TLS_FIRST_BYTE_WATCHDOG_MS: "80",
+    },
+    async () => {
+      setTlsClientForTest(
+        fakeTlsClient(
+          async () =>
+            new Response(neverYieldingBody(), {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            })
+        )
+      );
+
+      let dispatcherCalls = 0;
+      await assert.rejects(
+        runWithTlsTracking("openai", () =>
+          proxyFetch(
+            "https://example-provider.test/v1/chat/completions",
+            { method: "POST", body: "{}" },
+            {
+              undiciFetch: async () => {
+                dispatcherCalls++;
+                return new Response("unexpected", { status: 200 });
+              },
+            }
+          )
+        ),
+        (error: Error) =>
+          error.message === "TLS fingerprint request failed; request is not safe to replay"
+      );
+      assert.equal(dispatcherCalls, 0);
+    }
+  );
 });

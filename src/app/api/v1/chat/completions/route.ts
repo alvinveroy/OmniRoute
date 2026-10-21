@@ -22,6 +22,10 @@ import {
 import { createStreamDeadlineSignal } from "@omniroute/open-sse/utils/streamDeadlineSignal";
 import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveThreshold";
 import {
+  applyJevKeepaliveTuning,
+  buildKeepaliveTuningKey,
+} from "../../../../../../open-sse/utils/keepaliveJevTuning.ts";
+import {
   admitChatRequest,
   admitChatStructure,
   CHAT_ADMISSION_QUEUE_MAX_MS,
@@ -331,7 +335,13 @@ export async function POST(request) {
       );
       const streamedResponse = await withEarlyStreamKeepalive(handlerResponse, {
         signal: routeDeadlineSignal,
-        thresholdMs: resolveKeepaliveThreshold(parsedBody?.model),
+        thresholdMs: applyJevKeepaliveTuning(
+          resolveKeepaliveThreshold(parsedBody?.model),
+          buildKeepaliveTuningKey({
+            model: parsedBody?.model,
+            hasTools: Array.isArray(parsedBody?.tools) && parsedBody.tools.length > 0,
+          })
+        ),
         keepaliveFrame: OPENAI_KEEPALIVE_FRAME,
         startupFrame: OPENAI_STARTUP_FRAME,
         errorFrame: OPENAI_CHAT_ERROR_FRAME,

@@ -16,6 +16,11 @@ import {
 } from "./proxyDispatcher.ts";
 import { maybeReapDispatcherPool } from "./proxyDispatcherReap.ts";
 import tlsClient, { type TlsFetchOptions, guardTlsFirstByte } from "./tlsClient.ts";
+import {
+  armProviderFingerprint,
+  looksLikeFingerprintRejection,
+  providerFingerprintArmed,
+} from "./tlsFingerprintLadder.ts";
 import { withUpstreamStatusCapture } from "./upstreamStatusCapture.ts";
 import { stampOwnListenerSelfHop } from "./selfHop.ts";
 import { tlsFingerprintProviderAllowed } from "./tlsFingerprintExclusions.ts";
@@ -750,7 +755,13 @@ async function patchedFetchUnrecorded(
     if (
       isTlsFingerprintEnabled() &&
       activeTlsClient.available &&
-      tlsFingerprintProviderAllowed(tlsStore?.provider, false, targetUrl) &&
+      // Adaptive ladder: eager wreq only for explicitly allowlisted providers.
+      // Everyone else rides the plain direct path and is armed reactively when
+      // a Cloudflare fingerprint rejection is observed (the ladder retry below).
+      // The allowlisted path keeps upstream's URL-aware exclusions (Groq).
+      (process.env.TLS_FINGERPRINT_PROVIDERS?.trim()
+        ? tlsFingerprintProviderAllowed(tlsStore?.provider, false, targetUrl)
+        : providerFingerprintArmed(tlsStore?.provider)) &&
       isTlsRequestEligible(input, options)
     ) {
       try {
@@ -795,7 +806,41 @@ async function patchedFetchUnrecorded(
     if (process.versions.bun) {
       const _nativeFetch =
         (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
-      return _nativeFetch(input, options);
+      const response = await _nativeFetch(input, options);
+      // Adaptive ladder step 2: a Cloudflare fingerprint rejection on the plain
+      // path arms the provider and retries once through wreq-js. Replay-safe
+      // requests only (GET/HEAD) — never replay a non-idempotent body.
+      if (
+        response.status === 403 &&
+        isTlsFingerprintEnabled() &&
+        activeTlsClient.available &&
+        isTlsRequestEligible(input, options) &&
+        isAmbiguousFailureReplaySafe(input, options) &&
+        (await looksLikeFingerprintRejection(response)) &&
+        armProviderFingerprint(tlsStore?.provider)
+      ) {
+        console.warn(
+          `[ProxyFetch] Cloudflare fingerprint rejection on ${tlsStore?.provider ?? targetUrl} — retrying once via the TLS-impersonation transport`
+        );
+        try {
+          const wreqResponse = await activeTlsClient.fetch(targetUrl, {
+            method: options.method,
+            headers: options.headers,
+            body: options.body as TlsFetchOptions["body"],
+            redirect: options.redirect,
+            signal: getEffectiveSignal(input, options),
+            proxy: null,
+            sessionScope: tlsStore?.sessionScope,
+            ...tlsProfileForProvider(tlsStore?.provider),
+          });
+          if (tlsStore) tlsStore.used = true;
+          return await guardTlsFirstByte(wreqResponse);
+        } catch (error) {
+          if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+          console.warn("[ProxyFetch] TLS-impersonation retry failed; returning the original 403");
+        }
+      }
+      return response;
     }
     // Direct undici path: bound response-start, fresh-socket retry, and body guard.
     const directOptions = { ...options, signal: getEffectiveSignal(input, options) };

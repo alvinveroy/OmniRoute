@@ -343,6 +343,9 @@ test("findMissingArtifactPaths flags missing root runtime files in the tarball",
     "dist/open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/mcp-server.js",
     "dist/peer-stamp.mjs",
     "dist/responses-ws-proxy.mjs",
+    // Yano fork: the self-probe watchdog ships as a root runtime closure entry
+    // (cold-start wedge protection) and is enforced by PACK_ARTIFACT_REQUIRED_PATHS.
+    "dist/self-probe-watchdog.mjs",
     "dist/server-ws.mjs",
     "dist/src/lib/db/healthCheckWorker.js",
     "dist/src/lib/logExport/exportChild.js",

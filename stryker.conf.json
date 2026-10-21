@@ -103,6 +103,7 @@
       "tests/unit/noauth-pause-retryable-cooldown.test.ts",
       "tests/unit/16824-modelscope-model-denial.test.ts",
       "tests/unit/10085-compatible-generic-vs-uuid-credential.test.ts",
+      "tests/unit/10281-combo-reasoning-probe.test.ts",
       "tests/unit/8200-perplexity-web-401-cooldown.test.ts",
       "tests/unit/8247-accountfallback-model-unhealthy.test.ts",
       "tests/unit/8248-accountfallback-nvidia-degraded.test.ts",
