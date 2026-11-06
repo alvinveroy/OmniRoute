@@ -39,7 +39,7 @@ export async function getDisabledRerankProviders(): Promise<Set<string>> {
   } catch (error) {
     log.warn(
       "Could not read disabled rerank providers; treating every rerank provider as blocked",
-      error instanceof Error ? error.message : String(error)
+      { error: error instanceof Error ? error.message : String(error) }
     );
     return new Set(["*"]);
   }
