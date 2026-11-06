@@ -34,7 +34,7 @@ import QuotaCutoffModal from "./QuotaCutoffModal";
 import QuotaCardGrid from "./QuotaCardGrid";
 import QuotaLayoutPicker, { useQuotaLayout } from "./QuotaLayoutPicker";
 import HealthStats from "./HealthStats";
-import { readLimitsPreference } from "./providerOrder";
+import { isStaleLimitsFilter, readLimitsPreference } from "./providerOrder";
 import {
   displayAccount,
   matchesDisplayFilter,
@@ -735,6 +735,33 @@ export default function ProviderLimits({
     () => buildProviderOptions(sortedConnections, compareTr),
     [sortedConnections]
   );
+
+  // A persisted provider/env filter that no longer matches any option silently
+  // empties the account list ("No accounts found for tier filter All.") while
+  // the provider <Select> still displays "All providers" — and the env chip row
+  // does not even render when no connection carries a tag, so there is no way
+  // back. Drop the stale preference once the connection set is known.
+  useEffect(() => {
+    if (initialLoading || sortedConnections.length === 0) return;
+    if (!isStaleLimitsFilter(providerFilter, providerOptions)) return;
+    setProviderFilter("all");
+    try {
+      localStorage.removeItem(LS_PROVIDER_FILTER);
+    } catch {
+      /* ignore */
+    }
+  }, [initialLoading, sortedConnections.length, providerFilter, providerOptions]);
+
+  useEffect(() => {
+    if (initialLoading || sortedConnections.length === 0) return;
+    if (!isStaleLimitsFilter(envFilter, envTags)) return;
+    setEnvFilter("all");
+    try {
+      localStorage.removeItem(LS_ENV_FILTER);
+    } catch {
+      /* ignore */
+    }
+  }, [initialLoading, sortedConnections.length, envFilter, envTags]);
 
   // Auto-fetch LIVE quota on open for visible connections that have no cached
   // quota yet (e.g. a Codex account whose access_token expired — its per-connection

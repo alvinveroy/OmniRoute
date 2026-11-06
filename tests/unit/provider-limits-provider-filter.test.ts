@@ -13,6 +13,7 @@ import {
   buildProviderOptions,
   matchesProviderFilter,
 } from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils.tsx";
+import { isStaleLimitsFilter } from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/providerOrder.ts";
 
 test("PR#769: matchesProviderFilter — 'all' lets every connection through", () => {
   assert.equal(matchesProviderFilter({ provider: "openai" }, "all"), true);
@@ -78,10 +79,42 @@ test("PR#769: buildProviderOptions — honors a custom comparator (e.g. Turkish-
   // unchanged — verify with a reverse comparator instead of pulling in the
   // real i18n helper.
   const reverse = (a: string, b: string) => b.localeCompare(a);
-  const out = buildProviderOptions([{ provider: "a" }, { provider: "c" }, { provider: "b" }], reverse);
+  const out = buildProviderOptions(
+    [{ provider: "a" }, { provider: "c" }, { provider: "b" }],
+    reverse
+  );
   assert.deepEqual(out, ["c", "b", "a"]);
 });
 
 test("PR#769: buildProviderOptions — returns [] for an empty connection list", () => {
   assert.deepEqual(buildProviderOptions([]), []);
+});
+
+/**
+ * A persisted filter (omniroute:limits:providerFilter / :envFilter) survives
+ * across releases, so it can name a provider that was renamed or an env tag
+ * that no connection carries any more. The Provider Limits page then renders
+ * "No accounts found for tier filter All." — the provider <Select> already
+ * displays "All providers" for the unknown value, and the env chip row does not
+ * render at all, so nothing on screen can clear it.
+ */
+test("stale persisted filters are detected against the live option set", () => {
+  // A provider that no longer exists (renamed / connection removed).
+  assert.equal(isStaleLimitsFilter("kimi-coding", ["command-code", "openrouter"]), true);
+  // An env tag that no connection carries any more (empty option set).
+  assert.equal(isStaleLimitsFilter("prod", []), true);
+});
+
+test("a live filter and the 'all' sentinel are never stale", () => {
+  assert.equal(isStaleLimitsFilter("command-code", ["command-code", "openrouter"]), false);
+  assert.equal(isStaleLimitsFilter("all", []), false);
+  // A blank stored value behaves like "all" (readLimitsPreference's fallback).
+  assert.equal(isStaleLimitsFilter("", []), false);
+});
+
+test("readLimitsPreference hands back the raw stored value, so only the stale check can drop it", () => {
+  const store: Record<string, string> = { "omniroute:limits:providerFilter": "kimi-coding" };
+  const stored = store["omniroute:limits:providerFilter"] || "all";
+  assert.equal(stored, "kimi-coding");
+  assert.equal(isStaleLimitsFilter(stored, ["command-code"]), true);
 });

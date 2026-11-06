@@ -7,6 +7,20 @@ export function readLimitsPreference(key: string, fallback = "all"): string {
     return fallback;
   }
 }
+
+/**
+ * A persisted provider/env filter that no longer matches any option is stale:
+ * the provider id was renamed or removed, or the connection's env tag is gone.
+ * The provider <Select> already displays "All providers" for an unknown value,
+ * so the filter state has to follow the same truth — otherwise the account list
+ * stays empty ("No accounts found for tier filter All.") with no visible control
+ * able to clear it. The env chip row does not render at all when no connection
+ * carries a tag, which is why a stale env filter cannot be reset from the UI.
+ */
+export function isStaleLimitsFilter(selected: string, available: readonly string[]): boolean {
+  if (!selected || selected === "all") return false;
+  return !available.includes(selected);
+}
 export function readProviderOrder(
   storage: () => Pick<Storage, "getItem"> = () => localStorage
 ): string[] {
