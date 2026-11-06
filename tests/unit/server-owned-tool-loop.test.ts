@@ -1194,3 +1194,46 @@ test("Jev stop-tools advisory is appended from the SECOND follow-up onward", asy
     }
   }
 });
+
+test("boundary precedence: output budget wins over follow-up limit and deadline", async () => {
+  let clockReads = 0;
+  const result = await runServerOwnedToolLoop(
+    makeDefaultOptions({
+      now: () => {
+        clockReads++;
+        return 1000;
+      },
+      deadlineAtMs: 1001,
+      maxFollowUps: 0,
+      maxTotalResultBytes: 1,
+      resumeUpstream: async () => {
+        throw new Error("must not resume");
+      },
+    })
+  );
+  assert.equal(result.kind, "ok");
+  assert.equal(result.termination, "tool_output_budget");
+  assert.equal(result.followUps, 0);
+  assert.equal(clockReads, 1);
+});
+
+test("boundary precedence: follow-up limit wins over deadline without another clock read", async () => {
+  let clockReads = 0;
+  const result = await runServerOwnedToolLoop(
+    makeDefaultOptions({
+      now: () => {
+        clockReads++;
+        return 1000;
+      },
+      deadlineAtMs: 1001,
+      maxFollowUps: 0,
+      resumeUpstream: async () => {
+        throw new Error("must not resume");
+      },
+    })
+  );
+  assert.equal(result.kind, "ok");
+  assert.equal(result.termination, "max_followups");
+  assert.equal(result.followUps, 0);
+  assert.equal(clockReads, 1);
+});

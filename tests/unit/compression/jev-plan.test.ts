@@ -172,7 +172,7 @@ test("preferred=none with confidence switches the plan off", async () => {
   assert.equal(result.adjustment?.reason, "jev-none");
 });
 
-test("preferred=lite is applied directly", async () => {
+test("preferred=lite is applied as the lossless lite step", async () => {
   useCredential();
   stubDecision({
     lowBenefit: 0.1,
@@ -181,7 +181,13 @@ test("preferred=lite is applied directly", async () => {
     intensityConfidence: 0.1,
   });
   const result = await adjustCompressionPlanWithJev(baseInput());
-  assert.equal(result.plan.mode, "lite");
+  // Since 3.8.54 the lossy policy expresses lite as a one-step stacked plan.
+  assert.equal(result.plan.mode, "stacked");
+  assert.equal(result.plan.reportedMode, "lite");
+  assert.deepEqual(
+    result.plan.stackedPipeline.map((step) => step.engine),
+    ["lite"]
+  );
   assert.equal(result.adjustment?.reason, "jev-preferred");
 });
 
