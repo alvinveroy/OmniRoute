@@ -7,14 +7,20 @@ const chatCore = readFileSync(
   fileURLToPath(new URL("../../../open-sse/handlers/chatCore.ts", import.meta.url)),
   "utf8"
 );
+const jevPlan = readFileSync(
+  fileURLToPath(new URL("../../../open-sse/services/compression/jevPlan.ts", import.meta.url)),
+  "utf8"
+);
 
-test("chatCore threads modelContextLimit + requestMaxTokens into selectCompressionPlan", () => {
-  // the adaptive options object literal must reference both inputs
-  assert.match(chatCore, /modelContextLimit:/);
-  assert.match(chatCore, /requestMaxTokens:/);
+// The fork resolves the plan (and its adaptive inputs) inside jevPlan.ts so the
+// Jev refinement and the adaptive escalation share one owner; chatCore only
+// consumes the result. Assert the same wiring at its real location.
+test("the plan resolver threads modelContextLimit + requestMaxTokens into selectCompressionPlan", () => {
+  assert.match(jevPlan, /modelContextLimit,/);
+  assert.match(jevPlan, /requestMaxTokens,/);
 });
 
-test("chatCore emits the adaptive telemetry block via onAdaptive", () => {
-  assert.match(chatCore, /onAdaptive/);
+test("chatCore takes the adaptive telemetry from the resolver result", () => {
+  assert.match(chatCore, /compressionResolution\.telemetry/);
   assert.match(chatCore, /adaptiveTelemetry/);
 });
