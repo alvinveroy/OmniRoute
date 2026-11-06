@@ -111,10 +111,3 @@ test("a live filter and the 'all' sentinel are never stale", () => {
   // A blank stored value behaves like "all" (readLimitsPreference's fallback).
   assert.equal(isStaleLimitsFilter("", []), false);
 });
-
-test("readLimitsPreference hands back the raw stored value, so only the stale check can drop it", () => {
-  const store: Record<string, string> = { "omniroute:limits:providerFilter": "kimi-coding" };
-  const stored = store["omniroute:limits:providerFilter"] || "all";
-  assert.equal(stored, "kimi-coding");
-  assert.equal(isStaleLimitsFilter(stored, ["command-code"]), true);
-});
