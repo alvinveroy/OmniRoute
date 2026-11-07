@@ -115,15 +115,21 @@ rc=${rc:-0}
 
 result=$(sudo systemctl show "$unit" -p Result --value 2>/dev/null || true)
 status=$(sudo systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || true)
+code=$(sudo systemctl show "$unit" -p ExecMainCode --value 2>/dev/null || true)
 sudo systemctl reset-failed "$unit" >/dev/null 2>&1 || true
 
 if [[ -n "$abort_reason" ]]; then
   echo "[guard] build aborted by watchdog: ${abort_reason}" >&2
   exit 137
 fi
-if [[ "$rc" -ne 0 || "$result" == "oom-kill" ]]; then
-  echo "[guard] build failed: rc=${rc} unit_result=${result:-unknown} exec_status=${status:-?}" >&2
+# An interrupted phase is NOT a successful phase: an externally stopped unit
+# reports Result=success and a zero exit status, so the unit's own exit status
+# has to be checked too — otherwise a killed build looks green and the next
+# phase packs a partial tree.
+if [[ "$rc" -ne 0 || "$result" != "success" || -z "$status" || "$status" != "0" ]]; then
+  echo "[guard] build failed: rc=${rc} unit_result=${result:-unknown} exec_status=${status:-?} exec_code=${code:-?}" >&2
   [[ "$result" == "oom-kill" ]] && echo "[guard] OOM-killed: raise OMNI_BUILD_MEM_MAX or lower NEXT_BUILD_CPUS/NODE_OPTIONS" >&2
+  [[ "$result" == "success" && "$rc" == "0" ]] && echo "[guard] the unit was interrupted (exit status ${status:-?}/${code:-?}) — refusing to report success" >&2
   exit $(( rc == 0 ? 1 : rc ))
 fi
 echo "[guard] ${phase} OK in ${unit}"
