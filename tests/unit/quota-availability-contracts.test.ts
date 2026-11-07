@@ -17,6 +17,7 @@ import { buildHealthAccount } from "../../src/app/(dashboard)/dashboard/usage/co
 import {
   displayAccount,
   displayPool,
+  statusFilterLabelKey,
 } from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/availabilityDisplay.ts";
 const now = Date.now();
 const at = (offset: number) => new Date(now + offset).toISOString();
@@ -234,4 +235,15 @@ test("control: isolated weekly exhaustion identifies the weekly deadline", () =>
   );
   assert.equal(view.kind, "cdw");
   assert.equal(view.recoverAt, at(6 * 86400000));
+});
+
+test("statusFilterLabelKey resolves display kinds and refuses the aggregate severities", () => {
+  assert.equal(statusFilterLabelKey("empty"), "usage.tierUnknown");
+  assert.equal(statusFilterLabelKey("ok"), "usage.healthAvailable");
+  assert.equal(statusFilterLabelKey("paused"), "common.paused");
+  // "critical" / "alert" are valid persisted status filters but have no
+  // display label of their own — the quota empty state must not look up an
+  // undefined translation key (which throws) for them.
+  assert.equal(statusFilterLabelKey("critical"), null);
+  assert.equal(statusFilterLabelKey("alert"), null);
 });

@@ -27,6 +27,15 @@ export const DISPLAY_LABELS = {
   paused: "common.paused",
   empty: "usage.tierUnknown",
 } as const;
+/**
+ * The i18n key for a status filter value, or null when the value has no label
+ * of its own. "critical" and "alert" are aggregate severities that survive in
+ * persisted preferences but are not display kinds, so the lookup must not
+ * assume every DisplayFilter is a DISPLAY_LABELS key.
+ */
+export function statusFilterLabelKey(statusFilter: string): string | null {
+  return DISPLAY_LABELS[statusFilter as DisplayKind] ?? null;
+}
 const FIVE_HOURS = 5 * 3_600_000;
 const WEEK = 7 * 24 * 3_600_000;
 export function poolIds(account: HealthAccount): string[] {

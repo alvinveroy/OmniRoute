@@ -42,8 +42,8 @@ import {
 import {
   displayAccount,
   matchesDisplayFilter,
+  statusFilterLabelKey,
   DISPLAY_KINDS,
-  DISPLAY_LABELS,
   type DisplayFilter,
 } from "./availabilityDisplay";
 import { useAvailability } from "./useAvailability";
@@ -798,12 +798,16 @@ export default function ProviderLimits({
                 "purchaseAll"
             ),
           };
-        case "status":
+        case "status": {
+          // "critical" / "alert" are valid persisted filters without a display
+          // label of their own — show the raw value instead of an undefined key.
+          const statusLabelKey = statusFilterLabelKey(statusFilter);
           return {
             dimension,
             label: tr("filterStatusLabel", "Status"),
-            value: tAll(DISPLAY_LABELS[statusFilter as keyof typeof DISPLAY_LABELS]),
+            value: statusLabelKey ? tAll(statusLabelKey) : statusFilter,
           };
+        }
         default:
           return {
             dimension,
