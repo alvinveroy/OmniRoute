@@ -13,7 +13,10 @@ import {
   buildProviderOptions,
   matchesProviderFilter,
 } from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils.tsx";
-import { isStaleLimitsFilter } from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/providerOrder.ts";
+import {
+  activeLimitFilterDimensions,
+  isStaleLimitsFilter,
+} from "../../src/app/(dashboard)/dashboard/usage/components/ProviderLimits/providerOrder.ts";
 
 test("PR#769: matchesProviderFilter — 'all' lets every connection through", () => {
   assert.equal(matchesProviderFilter({ provider: "openai" }, "all"), true);
@@ -110,4 +113,36 @@ test("a live filter and the 'all' sentinel are never stale", () => {
   assert.equal(isStaleLimitsFilter("all", []), false);
   // A blank stored value behaves like "all" (readLimitsPreference's fallback).
   assert.equal(isStaleLimitsFilter("", []), false);
+});
+
+test("the empty state names every filter that is narrowing the list", () => {
+  // A persisted status kind with zero accounts is the case that used to read
+  // as "No accounts found for tier filter All".
+  assert.deepEqual(activeLimitFilterDimensions({ status: "empty" }), ["status"]);
+  assert.deepEqual(
+    activeLimitFilterDimensions({
+      provider: "opencode",
+      env: "prod",
+      purchaseType: "apikey",
+      status: "empty",
+      tier: "pro",
+    }),
+    ["provider", "env", "purchaseType", "status", "tier"]
+  );
+});
+
+test("no narrowing filter means no dimension to name", () => {
+  assert.deepEqual(activeLimitFilterDimensions({}), []);
+  assert.deepEqual(
+    activeLimitFilterDimensions({
+      provider: "all",
+      env: "all",
+      purchaseType: "all",
+      status: "all",
+      tier: "all",
+    }),
+    []
+  );
+  // A missing value is not an active filter either.
+  assert.deepEqual(activeLimitFilterDimensions({ status: null, tier: undefined }), []);
 });

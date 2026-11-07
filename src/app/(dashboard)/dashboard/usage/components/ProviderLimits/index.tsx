@@ -34,11 +34,16 @@ import QuotaCutoffModal from "./QuotaCutoffModal";
 import QuotaCardGrid from "./QuotaCardGrid";
 import QuotaLayoutPicker, { useQuotaLayout } from "./QuotaLayoutPicker";
 import HealthStats from "./HealthStats";
-import { isStaleLimitsFilter, readLimitsPreference } from "./providerOrder";
+import {
+  activeLimitFilterDimensions,
+  isStaleLimitsFilter,
+  readLimitsPreference,
+} from "./providerOrder";
 import {
   displayAccount,
   matchesDisplayFilter,
   DISPLAY_KINDS,
+  DISPLAY_LABELS,
   type DisplayFilter,
 } from "./availabilityDisplay";
 import { useAvailability } from "./useAvailability";
@@ -225,6 +230,7 @@ export default function ProviderLimits({
   autoRefreshInterval = 0,
 }: ProviderLimitsProps) {
   const t = useTranslations("usage");
+  const tAll = useTranslations();
   const tr = useCallback(
     (key: string, fallback: string, values?: UsageTranslationValues) =>
       translateUsageOrFallback(t, key, fallback, values),
@@ -763,6 +769,53 @@ export default function ProviderLimits({
     }
   }, [initialLoading, sortedConnections.length, envFilter, envTags]);
 
+  // The narrowing filters as labelled pairs, so an empty list can say WHICH
+  // filter produced it instead of always blaming the tier filter.
+  const activeFilters = useMemo(() => {
+    const dimensions = activeLimitFilterDimensions({
+      provider: providerFilter,
+      env: envFilter,
+      purchaseType: purchaseTypeFilter,
+      status: statusFilter,
+      tier: tierFilter,
+    });
+    return dimensions.map((dimension) => {
+      switch (dimension) {
+        case "provider":
+          return {
+            dimension,
+            label: tr("filterProviderLabel", "Provider"),
+            value: PROVIDER_LABEL[providerFilter] || providerFilter,
+          };
+        case "env":
+          return { dimension, label: tr("filterEnvLabel", "Env"), value: envFilter };
+        case "purchaseType":
+          return {
+            dimension,
+            label: t("filterPurchaseTypeLabel"),
+            value: t(
+              PURCHASE_TYPES.find((type) => type.key === purchaseTypeFilter)?.labelKey ||
+                "purchaseAll"
+            ),
+          };
+        case "status":
+          return {
+            dimension,
+            label: tr("filterStatusLabel", "Status"),
+            value: tAll(DISPLAY_LABELS[statusFilter as keyof typeof DISPLAY_LABELS]),
+          };
+        default:
+          return {
+            dimension,
+            label: t("filterTierLabel"),
+            value: t(
+              TIER_FILTERS.find((tier) => tier.key === tierFilter)?.labelKey || "tierUnknown"
+            ),
+          };
+      }
+    });
+  }, [providerFilter, envFilter, purchaseTypeFilter, statusFilter, tierFilter, t, tAll, tr]);
+
   // Auto-fetch LIVE quota on open for visible connections that have no cached
   // quota yet (e.g. a Codex account whose access_token expired — its per-connection
   // live fetch refreshes the token serialized/cascade-safe and surfaces real quota).
@@ -813,6 +866,23 @@ export default function ProviderLimits({
     setProviderFilter(value);
     try {
       localStorage.setItem(LS_PROVIDER_FILTER, value);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  /** Drop every narrowing filter (and its persisted preference) in one click. */
+  const handleClearFilters = useCallback(() => {
+    setProviderFilter("all");
+    setEnvFilter("all");
+    setPurchaseTypeFilter("all");
+    setStatusFilter("all");
+    setTierFilter("all");
+    try {
+      localStorage.removeItem(LS_PROVIDER_FILTER);
+      localStorage.removeItem(LS_ENV_FILTER);
+      localStorage.removeItem(LS_PURCHASE_FILTER);
+      localStorage.removeItem(LS_STATUS_FILTER);
     } catch {
       /* ignore */
     }
@@ -1024,14 +1094,21 @@ export default function ProviderLimits({
       <div className="flex flex-col gap-3">
         {visibleConnections.length === 0 && (
           <div className="py-6 px-4 text-center text-text-muted text-[13px] rounded-lg border border-border bg-surface">
-            {t("noAccountsForTierFilter")}{" "}
-            <strong>
-              {(() => {
-                const tier = TIER_FILTERS.find((tier) => tier.key === tierFilter);
-                return tier?.label || t(tier?.labelKey || "tierUnknown");
-              })()}
-            </strong>
-            .
+            <div>{tAll("common.noResults")}</div>
+            {activeFilters.length > 0 && (
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[12px]">
+                {activeFilters.map((filter) => (
+                  <span key={filter.dimension}>
+                    {filter.label}: <strong>{filter.value}</strong>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 flex justify-center">
+              <Button variant="outline" onClick={handleClearFilters}>
+                {tAll("common.clearFilters")}
+              </Button>
+            </div>
           </div>
         )}
 

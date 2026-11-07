@@ -21,6 +21,31 @@ export function isStaleLimitsFilter(selected: string, available: readonly string
   if (!selected || selected === "all") return false;
   return !available.includes(selected);
 }
+
+/** The filter dimensions that can narrow the account list. */
+export type LimitFilterDimension = "provider" | "env" | "purchaseType" | "status" | "tier";
+
+/**
+ * The dimensions currently narrowing the list, in display order. The empty
+ * state has to name them: a persisted filter that matches nothing (a status
+ * kind with zero accounts, a provider upstream removed) otherwise reads as
+ * "No accounts found for tier filter All", which points at the wrong control.
+ */
+export function activeLimitFilterDimensions(filters: {
+  provider?: string | null;
+  env?: string | null;
+  purchaseType?: string | null;
+  status?: string | null;
+  tier?: string | null;
+}): LimitFilterDimension[] {
+  const dimensions: LimitFilterDimension[] = [];
+  if (filters.provider && filters.provider !== "all") dimensions.push("provider");
+  if (filters.env && filters.env !== "all") dimensions.push("env");
+  if (filters.purchaseType && filters.purchaseType !== "all") dimensions.push("purchaseType");
+  if (filters.status && filters.status !== "all") dimensions.push("status");
+  if (filters.tier && filters.tier !== "all") dimensions.push("tier");
+  return dimensions;
+}
 export function readProviderOrder(
   storage: () => Pick<Storage, "getItem"> = () => localStorage
 ): string[] {
