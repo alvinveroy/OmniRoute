@@ -66,6 +66,7 @@ awk -v l="$load" -v n="$ncpu" -v max="$MAX_LOAD_PER_CPU" 'BEGIN{exit !(l>n*max)}
 }
 
 unit="omniroute-${phase}-$(date +%Y%m%d-%H%M%S)"
+phase_start=$(date +%s)
 echo "[guard] unit=${unit} cmd='${cmd}' avail=${avail}MB load1=${load} ncpu=${ncpu}"
 echo "[guard] caps: MemoryMax=${MEM_MAX} MemoryHigh=${MEM_HIGH} MemorySwapMax=${MEM_SWAP_MAX}" \
      "CPUWeight=40 IOWeight=40 TasksMax=2048 RuntimeMaxSec=${RUNTIME_MAX}"
@@ -118,6 +119,28 @@ status=$(sudo systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || tr
 code=$(sudo systemctl show "$unit" -p ExecMainCode --value 2>/dev/null || true)
 sudo systemctl reset-failed "$unit" >/dev/null 2>&1 || true
 
+# A unit that was stopped from the outside still reports Result=success and a
+# zero exit status, so the unit's own status cannot tell an interrupted phase
+# from a finished one. The phase artifact can: a build that did not produce a
+# fresh artifact is a failed build, whatever the unit said.
+artifact=""
+case "$phase" in
+  build) artifact="$PWD/.build/next/standalone/server.js" ;;
+  cli) artifact="$PWD/dist/server.js" ;;
+  pack) artifact=$(ls -t "$PWD"/omniroute-*.tgz 2>/dev/null | head -1) ;;
+esac
+artifact_problem=""
+if [[ -n "$artifact" ]]; then
+  if [[ ! -f "$artifact" ]]; then
+    artifact_problem="phase artifact missing: $artifact"
+  else
+    artifact_mtime=$(stat -c %Y "$artifact" 2>/dev/null || echo 0)
+    if (( artifact_mtime < phase_start )); then
+      artifact_problem="phase artifact is stale: $artifact"
+    fi
+  fi
+fi
+
 if [[ -n "$abort_reason" ]]; then
   echo "[guard] build aborted by watchdog: ${abort_reason}" >&2
   exit 137
@@ -126,8 +149,8 @@ fi
 # reports Result=success and a zero exit status, so the unit's own exit status
 # has to be checked too — otherwise a killed build looks green and the next
 # phase packs a partial tree.
-if [[ "$rc" -ne 0 || "$result" != "success" || -z "$status" || "$status" != "0" ]]; then
-  echo "[guard] build failed: rc=${rc} unit_result=${result:-unknown} exec_status=${status:-?} exec_code=${code:-?}" >&2
+if [[ "$rc" -ne 0 || "$result" != "success" || -z "$status" || "$status" != "0" || -n "$artifact_problem" ]]; then
+  echo "[guard] build failed: rc=${rc} unit_result=${result:-unknown} exec_status=${status:-?} exec_code=${code:-?} ${artifact_problem}" >&2
   [[ "$result" == "oom-kill" ]] && echo "[guard] OOM-killed: raise OMNI_BUILD_MEM_MAX or lower NEXT_BUILD_CPUS/NODE_OPTIONS" >&2
   [[ "$result" == "success" && "$rc" == "0" ]] && echo "[guard] the unit was interrupted (exit status ${status:-?}/${code:-?}) — refusing to report success" >&2
   exit $(( rc == 0 ? 1 : rc ))
